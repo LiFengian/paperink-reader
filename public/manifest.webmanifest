@@ -1,0 +1,13 @@
+{
+  "name": "墨读 PaperInk",
+  "short_name": "墨读",
+  "description": "iPad 文献阅读、手写批注与 AI 助读",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f6",
+  "theme_color": "#2d7065",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
