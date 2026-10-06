@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, PenLine, Plus, Redo2, Send, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createShareablePdf } from "../lib/export-pdf";
 import { deleteDocument, getPdf, listDocuments, saveDocument, savePdf } from "../lib/local-store";
 import { clamp, markBounds, markInPolygon, markNear, movedMark, pathFromPoints, pointInPolygon } from "../lib/geometry";
@@ -17,6 +18,13 @@ type History = { pageId: string; before: Mark[]; after: Mark[] };
 type Quote = { text: string; pageId: string };
 const COLORS = ["#202a35", "#d4654f", "#4c79bb", "#298f79", "#e3ba4e"];
 const uid = () => crypto.randomUUID();
+
+function pdfImportErrorMessage(error: unknown) {
+  if (error instanceof Error && error.name === "PasswordException") return "这个 PDF 需要密码，暂时无法导入。";
+  if (error instanceof Error && error.name === "InvalidPDFException") return "PDF 文件结构损坏，无法导入。";
+  if (error instanceof Error && error.name === "QuotaExceededError") return "设备存储空间不足，无法保存 PDF。";
+  return "PDF 导入失败，请刷新页面后重试。";
+}
 
 function ToolButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button className={`tool-button ${active ? "active" : ""}`} title={label} aria-label={label} onClick={onClick}>{children}</button>;
@@ -82,7 +90,7 @@ export default function Home() {
       const blob = await getPdf(doc.id);
       if (!blob || cancelled) return;
       const pdfjs = await import("pdfjs-dist");
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
       task = pdfjs.getDocument({ data: await blob.arrayBuffer() });
       const opened = await (task as ReturnType<typeof pdfjs.getDocument>).promise;
       if (!cancelled) setPdf(opened);
@@ -139,7 +147,7 @@ export default function Home() {
     try {
       const bytes = await file.arrayBuffer();
       const pdfjs = await import("pdfjs-dist");
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
       const task = pdfjs.getDocument({ data: bytes.slice(0) });
       const opened = await task.promise;
       const pages: ReaderPage[] = [];
@@ -154,7 +162,7 @@ export default function Home() {
       await saveDocument(next);
       setLibrary(items => [next, ...items]); setDoc(next); setZoom(1); setLibraryOpen(false);
       setMessage(`已导入 ${pages.length} 页，文件保存在此设备。`);
-    } catch { setMessage("PDF 导入失败。加密或损坏的 PDF 可能无法打开。"); }
+    } catch (error) { console.error("PDF import failed", error); setMessage(pdfImportErrorMessage(error)); }
     finally { setBusy(false); if (pdfInput.current) pdfInput.current.value = ""; }
   }
   function changePage(index: number) {
