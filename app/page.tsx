@@ -30,7 +30,56 @@ function ToolButton({ label, active, onClick, children }: { label: string; activ
   return <button className={`tool-button ${active ? "active" : ""}`} title={label} aria-label={label} onClick={onClick}>{children}</button>;
 }
 
-export default function Home() {
+function AccessGate({ children }: { children: React.ReactNode }) {
+  const [status, setStatus] = useState<"checking" | "locked" | "ready" | "unavailable">("checking");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/access", { cache: "no-store", credentials: "same-origin", signal: controller.signal })
+      .then(response => { if (!response.ok) throw new Error("访问服务暂时不可用。"); return response.json() as Promise<{ authorized: boolean; configured: boolean }>; })
+      .then((result: { authorized: boolean; configured: boolean }) => setStatus(result.authorized ? "ready" : result.configured ? "locked" : "unavailable"))
+      .catch(() => { if (!controller.signal.aborted) setStatus("unavailable"); });
+    return () => controller.abort();
+  }, []);
+
+  async function unlock() {
+    if (!code.trim() || submitting) return;
+    setSubmitting(true); setError("");
+    try {
+      const response = await fetch("/api/access", {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim() }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "验证失败，请重试。");
+      setCode(""); setStatus("ready");
+    } catch (reason) { setError((reason as Error).message || "验证失败，请重试。"); }
+    finally { setSubmitting(false); }
+  }
+
+  if (status === "ready") return children;
+  return <main className="access-shell"><div className="access-card">
+    <div className="access-brand"><span className="brand-mark"><BookOpen size={23} /></span><span>墨读<span className="brand-dot">.</span></span></div>
+    <span className="eyebrow">YOUR READING DESK</span>
+    <h1>{status === "unavailable" ? "暂时无法验证访问码" : "欢迎回来"}</h1>
+    <p>{status === "checking" ? "正在检查这台设备的访问状态…" : status === "unavailable" ? "请稍后刷新页面重试。" : "首次输入应用访问码即可。此后这台设备会记住，无需再登录 GPT。"}</p>
+    {status === "locked" && <form onSubmit={event => { event.preventDefault(); void unlock(); }}>
+      <label htmlFor="access-code">应用访问码</label>
+      <input id="access-code" type="password" value={code} onChange={event => setCode(event.target.value)} autoComplete="off" placeholder="粘贴你的访问码" required />
+      {error && <span className="access-error" role="alert">{error}</span>}
+      <button type="submit" disabled={submitting || !code}>{submitting ? "正在验证…" : "进入墨读"}</button>
+    </form>}
+    {status === "unavailable" && <button className="access-retry" onClick={() => window.location.reload()}>刷新页面</button>}
+    <small>文献和笔记仍保存在这台设备。</small>
+  </div></main>;
+}
+
+export default function Home() { return <AccessGate><Reader /></AccessGate>; }
+
+function Reader() {
   const [library, setLibrary] = useState<ReaderDocument[]>([]);
   const [doc, setDoc] = useState<ReaderDocument | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);

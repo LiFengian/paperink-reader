@@ -1,4 +1,18 @@
 :root{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#263143;background:#f7f7f5}
+ .access-shell{min-height:100dvh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 35%,#fff 0,#f1f5f0 55%,#e7eeea 100%)}
+ .access-card{width:min(100%,430px);padding:40px;background:#fff;border:1px solid #e5ebe7;border-radius:20px;box-shadow:0 20px 60px rgba(40,66,55,.1)}
+ .access-brand{display:flex;align-items:center;gap:10px;margin-bottom:42px;font-size:21px;font-weight:700;color:#253d48}
+ .access-brand .brand-dot{margin-left:0}
+ .access-card h1{margin:10px 0 8px;font-size:28px;letter-spacing:-.04em}
+ .access-card p{margin:0 0 27px;color:#6a7978;font-size:14px;line-height:1.7}
+ .access-card form{display:flex;flex-direction:column;gap:10px}
+ .access-card label{font-size:12px;font-weight:700;color:#536663}
+ .access-card input{width:100%;height:46px;padding:0 14px;border:1px solid #d7e2dc;border-radius:9px;outline:none;background:#fafcfb;color:#263143}
+ .access-card input:focus{border-color:#4f8e7e;box-shadow:0 0 0 3px #dceee5}
+ .access-card form button,.access-retry{height:44px;margin-top:6px;border:0;border-radius:9px;background:#2d7065;color:#fff;font-weight:700}
+ .access-card form button:hover,.access-retry:hover{background:#245d54}
+ .access-card small{display:block;margin-top:27px;color:#9aa7a2;font-size:11px}
+ .access-error{font-size:12px;color:#bc4d46}
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden}
 button,input,textarea{font:inherit}

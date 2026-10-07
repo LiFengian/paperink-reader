@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasPaperInkAccess } from "../../../lib/access";
 
 export const runtime = "edge";
 
 type SafeMessage = { role: "user" | "assistant"; content: string };
 
 export async function POST(request: NextRequest) {
+  if (!(await hasPaperInkAccess(request))) {
+    return NextResponse.json({ error: "请先输入应用访问码。" }, { status: 401 });
+  }
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) return NextResponse.json({ error: "站点尚未配置 DeepSeek API Key。" }, { status: 503 });
   if (Number(request.headers.get("content-length") || 0) > 3_000_000) {
