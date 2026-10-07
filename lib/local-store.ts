@@ -65,3 +65,20 @@ export async function deleteDocument(id: string): Promise<void> {
     db.close();
   }
 }
+
+// One transaction: an interrupted restore leaves the existing library intact.
+export async function restoreDocuments(entries: { document: ReaderDocument; pdf: Blob }[]): Promise<void> {
+  const db = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(["documents", "pdfs"], "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error("备份恢复已取消。"));
+      for (const entry of entries) {
+        transaction.objectStore("documents").add(entry.document);
+        transaction.objectStore("pdfs").add(entry.pdf, entry.document.id);
+      }
+    });
+  } finally { db.close(); }
+}

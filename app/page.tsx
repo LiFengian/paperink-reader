@@ -5,6 +5,8 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FileMinus2, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, Paintbrush, PenLine, Plus, Redo2, Send, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { PersonalControls } from "../components/personal-controls";
+import { askAi } from "../lib/ai-client";
 import { createShareablePdf } from "../lib/export-pdf";
 import { createAiContext } from "../lib/ai-context";
 import { aiStrokeKind, identifyAiMark } from "../lib/ai-selection";
@@ -21,6 +23,14 @@ type History =
   | { kind: "pages"; before: ReaderPage[]; after: ReaderPage[]; beforePage: number; afterPage: number };
 const COLORS = ["#202a35", "#d4654f", "#4c79bb", "#298f79", "#e3ba4e"];
 const uid = () => crypto.randomUUID();
+
+function pdfResources(personal: boolean) {
+  return personal ? {
+    cMapUrl: new URL("./pdfjs/cmaps/", document.baseURI).href, cMapPacked: true,
+    standardFontDataUrl: new URL("./pdfjs/standard_fonts/", document.baseURI).href,
+    wasmUrl: new URL("./pdfjs/wasm/", document.baseURI).href,
+  } : {};
+}
 
 function pdfImportErrorMessage(error: unknown) {
   if (error instanceof Error && error.name === "PasswordException") return "这个 PDF 需要密码，暂时无法导入。";
@@ -86,7 +96,7 @@ function AccessGate({ children }: { children: React.ReactNode }) {
 
 export default function Home() { return <AccessGate><Reader /></AccessGate>; }
 
-function Reader() {
+export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const [library, setLibrary] = useState<ReaderDocument[]>([]);
   const [doc, setDoc] = useState<ReaderDocument | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -119,7 +129,21 @@ function Reader() {
   const selectionBounds = useMemo(() => markBounds(page?.marks.filter(mark => selected.includes(mark.id)) || []), [page, selected]);
   const aiPageNumbers = doc?.pages.flatMap((item, index) => aiMarks.some(mark => mark.pageId === item.id) ? [index + 1] : []) || [];
 
-  useEffect(() => { listDocuments().then(setLibrary).catch(() => setMessage("无法读取本地文献库。")); }, []);
+  useEffect(() => {
+    listDocuments().then(items => {
+      setLibrary(items);
+      if (personal) {
+        const lastId = localStorage.getItem("paperink-last-document");
+        const last = items.find(item => item.id === lastId);
+        if (last) { setDoc(last); setLibraryOpen(false); }
+      }
+    }).catch(() => setMessage("无法读取本地文献库。"));
+  }, [personal]);
+  useEffect(() => {
+    if (personal && doc) {
+      try { localStorage.setItem("paperink-last-document", doc.id); } catch { /* Notes still save to IndexedDB. */ }
+    }
+  }, [personal, doc?.id]);
   useEffect(() => {
     const node = workspace.current;
     if (!node) return;
@@ -131,11 +155,11 @@ function Reader() {
   }, [!!doc, chatOpen, libraryOpen]);
   useEffect(() => {
     if (!doc) return;
-    const timer = window.setTimeout(() => {
-      saveDocument(doc).then(() => setLibrary(list => [doc, ...list.filter(item => item.id !== doc.id)].sort((a, b) => b.updatedAt - a.updatedAt)))
-        .catch(() => setMessage("自动保存失败。请检查 iPad 存储空间并导出 PDF。"));
-    }, 500);
-    return () => window.clearTimeout(timer);
+    let cancelled = false;
+    saveDocument(doc).then(() => {
+      if (!cancelled) setLibrary(list => [doc, ...list.filter(item => item.id !== doc.id)].sort((a, b) => b.updatedAt - a.updatedAt));
+    }).catch(() => { if (!cancelled) setMessage("自动保存失败。请检查 iPad 存储空间并保存完整备份。"); });
+    return () => { cancelled = true; };
   }, [doc]);
   useEffect(() => {
     chatMessages.current?.scrollTo({ top: chatMessages.current.scrollHeight, behavior: "smooth" });
@@ -151,7 +175,7 @@ function Reader() {
       if (!blob || cancelled) return;
       const pdfjs = await import("pdfjs-dist");
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-      task = pdfjs.getDocument({ data: await blob.arrayBuffer() });
+      task = pdfjs.getDocument({ data: await blob.arrayBuffer(), ...pdfResources(personal) });
       const opened = await (task as ReturnType<typeof pdfjs.getDocument>).promise;
       if (!cancelled) setPdf(opened);
     })().catch(() => { if (!cancelled) setMessage("PDF 加载失败，请尝试重新导入。"); });
@@ -232,7 +256,7 @@ function Reader() {
       const bytes = await file.arrayBuffer();
       const pdfjs = await import("pdfjs-dist");
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-      const task = pdfjs.getDocument({ data: bytes.slice(0) });
+      const task = pdfjs.getDocument({ data: bytes.slice(0), ...pdfResources(personal) });
       const opened = await task.promise;
       const pages: ReaderPage[] = [];
       for (let i = 1; i <= opened.numPages; i++) {
@@ -417,10 +441,8 @@ function Reader() {
       updateDoc(current => current.id === documentId ? { ...current, chat: [...current.chat, user] } : current);
       added = true; setPrompt("");
       const messages = [...previous.slice(-12).map(item => ({ role: item.role, content: item.quotedText ? `参考内容：${item.quotedText}\n问题：${item.content}` : item.content })), { role: "user", content }];
-      const response = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages, images }) });
-      const result = await response.json() as { error?: string; content?: string };
-      if (!response.ok) throw new Error(result.error || "AI 请求失败。");
-      updateDoc(current => current.id === documentId ? { ...current, chat: [...current.chat, { id: uid(), role: "assistant", content: result.content || "" }] } : current);
+      const answer = await askAi(messages as Pick<ChatMessage, "role" | "content">[], images, personal);
+      updateDoc(current => current.id === documentId ? { ...current, chat: [...current.chat, { id: uid(), role: "assistant", content: answer }] } : current);
       setAiMarks([]); setAiRedoMarks([]); setMessage("");
     } catch (error) {
       setMessage((error as Error).message || "AI 请求失败。");
@@ -439,7 +461,7 @@ function Reader() {
   return <main className="app-shell">
     <input ref={pdfInput} className="hidden-input" type="file" accept="application/pdf,.pdf" onChange={event => { const file = event.target.files?.[0]; if (file) void importPdf(file); }} />
     <input ref={imageInput} className="hidden-input" type="file" accept="image/*" onChange={event => { const file = event.target.files?.[0]; if (file) void addImage(file); }} />
-    <header className="topbar"><div className="topbar-left"><button className="plain-icon" aria-label="打开文献库" onClick={() => setLibraryOpen(!libraryOpen)}><Menu size={21} /></button><div className="brand"><span className="brand-mark"><BookOpen size={21} /></span>墨读<span className="brand-dot">.</span></div><span className="topbar-divider" /><span className="document-title" title={doc?.name}>{doc?.name || "你的文献工作台"}</span></div><div className="topbar-right"><span className="local-pill"><i />本机保存</span><button className="header-button subtle" onClick={() => setHelp(true)}><CircleHelp size={17} /><span>使用说明</span></button><button className="header-button primary" disabled={!doc || busy} onClick={() => void exportPdf()}><ArrowDownToLine size={17} /><span>导出与分享</span></button></div></header>
+    <header className="topbar"><div className="topbar-left"><button className="plain-icon" aria-label="打开文献库" onClick={() => setLibraryOpen(!libraryOpen)}><Menu size={21} /></button><div className="brand"><span className="brand-mark"><BookOpen size={21} /></span>墨读<span className="brand-dot">.</span></div><span className="topbar-divider" /><span className="document-title" title={doc?.name}>{doc?.name || "你的文献工作台"}</span></div><div className="topbar-right"><PersonalControls personal={personal} current={doc} disabled={busy} onRestored={async () => { setDoc(null); setLibrary(await listDocuments()); setLibraryOpen(true); setSelected([]); setAiMarks([]); setAiRedoMarks([]); setPrompt(""); }} /><span className="local-pill"><i />本机保存</span><button className="header-button subtle" onClick={() => setHelp(true)}><CircleHelp size={17} /><span>使用说明</span></button><button className="header-button primary" disabled={!doc || busy} onClick={() => void exportPdf()}><ArrowDownToLine size={17} /><span>导出与分享</span></button></div></header>
     <div className="app-body">
       {libraryOpen && <aside className="library-panel"><div className="panel-heading"><div><span className="eyebrow">LIBRARY</span><h2>文献库</h2></div><button className="plain-icon compact" aria-label="关闭文献库" onClick={() => setLibraryOpen(false)}><X size={18} /></button></div><button className="import-button" disabled={busy} onClick={() => pdfInput.current?.click()}><Plus size={18} />导入 PDF 文献</button><div className="library-caption">最近阅读 <span>{library.length}</span></div><div className="library-list">{library.length ? library.map(item => <div className={`library-item ${doc?.id === item.id ? "selected" : ""}`} key={item.id}><button className="library-open" disabled={busy} onClick={() => { setDoc(item); setSelected([]); setLibraryOpen(false); }}><span className="book-thumb"><BookOpen size={22} /></span><span className="book-info"><strong>{item.name}</strong><small>{item.pages.length} 页 · {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small></span></button><button className="delete-small" title="删除文献" aria-label={`删除 ${item.name}`} onClick={() => void removeDoc(item.id)}><Trash2 size={15} /></button></div>) : <div className="library-empty"><FolderOpen size={28} /><p>还没有文献</p><small>导入 PDF 后，笔记会自动保存在这台设备。</small></div>}</div><div className="library-footer"><span>◈</span><p>文献和笔记仅存于本机。点击发送后，标记附近的截图和提示词会一并发送给 DeepSeek。</p></div></aside>}
       <section className="reader-area">{doc && page ? <>
@@ -451,6 +473,6 @@ function Reader() {
       {chatOpen && <aside className="chat-panel"><div className="chat-heading"><div className="chat-heading-icon"><Sparkles size={20} /></div><div><span className="eyebrow">READING COMPANION</span><h2>AI 助读</h2></div><button className="plain-icon compact chat-close" aria-label="关闭 AI 助读" onClick={() => setChatOpen(false)}><X size={19} /></button></div><div ref={chatMessages} className="chat-messages">{doc?.chat.length ? doc.chat.map(item => <div className={`chat-message ${item.role}`} key={item.id}>{item.role === "assistant" && <span className="assistant-avatar">✦</span>}<div className="message-body">{item.quotedText && <div className="message-quote">“{item.quotedText.slice(0, 230)}{item.quotedText.length > 230 ? "…" : ""}”</div>}{item.images?.length ? <div className="message-images">{item.images.map((src, index) => <img key={index} src={src} alt={`本次提问的标记内容 ${index + 1}`} loading="lazy" />)}</div> : null}<p>{item.content}</p></div></div>) : <div className="chat-empty"><span>✦</span><h3>读到哪里，问到哪里</h3><p>用 <strong>AI 询问画笔</strong> 划线或画圈，输入提示词后一起发送。也可以直接打字提问。</p><button onClick={() => setPrompt("请解释这篇文献中的核心研究问题。")}>解释研究问题 <ChevronRight size={15} /></button><button onClick={() => setPrompt("请帮我梳理这页的主要论证。")}>梳理主要论证 <ChevronRight size={15} /></button></div>}{busy && <div className="typing-indicator"><i /><i /><i /></div>}</div><div className="chat-composer">{aiMarks.length > 0 && <div className="ai-mark-summary"><div><Paintbrush size={17} /><strong>已标记 {aiMarks.length} 处</strong><span>第 {aiPageNumbers.join("、")} 页</span></div><p>已定位的原文可核对、修正，再与提示词一起发送。</p><div className="ai-excerpt-list">{aiMarks.map((mark, index) => <label className="ai-excerpt" key={mark.id}><span>标记 {index + 1} · 第 {doc ? doc.pages.findIndex(item => item.id === mark.pageId) + 1 : 1} 页{!mark.selection ? " · 正在定位…" : mark.selection.boxes.length ? " · 已定位" : " · 截图识别"}</span><textarea aria-label={`标记 ${index + 1} 的原文`} rows={2} value={mark.textOverride ?? mark.selection?.text ?? ""} disabled={busy || !mark.selection} onChange={event => setAiMarks(marks => marks.map(item => item.id === mark.id ? { ...item, textOverride: event.target.value } : item))} placeholder="此处将使用高清截图；也可补充原文" /></label>)}</div><div className="ai-mark-actions"><button aria-label="撤回上一笔 AI 标记" disabled={busy} onClick={undoAiMark}><Undo2 size={13} />撤回上一笔</button><button aria-label="清空 AI 标记" disabled={busy} onClick={clearAiMarks}><X size={13} />清空标记</button></div></div>}<div className="composer-box"><textarea aria-label="向 AI 提问" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={doc ? aiMarks.length ? "输入提示词：想怎样解读这些标记？" : "输入问题，或先用 AI 画笔标记…" : "先导入一份 PDF 文献"} disabled={!doc || busy} rows={3} /><div><span>Enter 发送 · Shift + Enter 换行</span><button aria-label="发送消息" disabled={!doc || busy || !prompt.trim()} onClick={() => void sendMessage()}><Send size={17} /></button></div></div></div></aside>}
     </div>
     {message && <div className="status-toast" role="status"><span>{message}</span><button aria-label="关闭提示" onClick={() => setMessage("")}><X size={14} /></button></div>}
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="关闭说明" onClick={() => setHelp(false)}><X size={20} /></button><span className="eyebrow">QUICK START</span><h2>在 iPad 上开始阅读</h2><p><strong>01 导入文献</strong> 若要添加到主屏幕，请先添加并从图标打开，再导入 PDF。Safari 标签页与主屏幕版不会共享已导入文献。</p><p><strong>02 手写与整理</strong> Apple Pencil 写画；套索圈住笔迹或图片后拖动。手指移动页面。</p><p><strong>03 画笔提问</strong> 选择 AI 询问画笔，在文献上划线、画圈或做标记。可连续标记多处，输入提示词后点击发送。标记截图和提示词会一起交给 DeepSeek。</p><p><strong>04 分享批注</strong> 点击“导出与分享”，生成含笔迹和插图的 PDF，可发到微信。</p><div className="help-note">建议定期导出 PDF；清除网站数据会删除本机保存的文献与笔记。</div><button className="help-done" onClick={() => setHelp(false)}>开始使用</button></div></div>}
+    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="关闭说明" onClick={() => setHelp(false)}><X size={20} /></button><span className="eyebrow">QUICK START</span><h2>在 iPad 上开始阅读</h2><p><strong>01 导入文献</strong> 若要添加到主屏幕，请先添加并从图标打开，再导入 PDF。已有文献可在“完整备份”中生成 .paperink 文件，在新入口恢复。</p><p><strong>02 手写与整理</strong> Apple Pencil 写画；套索圈住笔迹或图片后拖动。手指移动页面。</p><p><strong>03 画笔提问</strong> 选择 AI 询问画笔，在文献上划线、画圈或做标记。可连续标记多处，输入提示词后点击发送。标记截图和提示词会一起交给 DeepSeek。</p><p><strong>04 分享批注</strong> 点击“导出与分享”，生成含笔迹和插图的 PDF，可发到微信。</p><div className="help-note">离线版请等“离线就绪”后使用。建议定期保存完整备份；清除网站数据会删除本机文献、笔记和离线资源。</div><button className="help-done" onClick={() => setHelp(false)}>开始使用</button></div></div>}
   </main>;
 }

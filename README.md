@@ -57,9 +57,43 @@ pnpm build
 
 `pnpm test` 覆盖划线偏移、密集相邻行、双栏、部分单词、圆圈、上下标和无文字层的处理。
 
-## 部署
+## 个人离线版（推荐自己在 iPad 上使用）
 
-项目使用 React、TypeScript、Vinext / Vite 和 Cloudflare Workers。AI 代理需要服务端运行，不能仅部署到 GitHub Pages。
+免费安装入口：<https://lifengian.github.io/paperink-reader/>。
+
+1. 用 iPad Safari 打开入口，选择“分享 → 添加到主屏幕”。
+2. 从主屏幕的“墨读”图标打开，等待“离线与备份”中显示“离线资源已就绪”。字体、文字映射、图片解码器和 PDF Worker 都会完整缓存。
+3. 在“离线与备份 → DeepSeek 设置”填写自己的 API Key。Key 仅保存在当前设备，不写入源码、服务器、离线资源缓存或文献库备份。
+4. 导入 PDF，或恢复旧入口导出的 `.paperink` 完整备份。
+
+日常从主屏幕打开后，即使托管入口暂时无法访问，也能读 PDF、手写批注、套索整理、插入/删除页、插入图片和导出 PDF；会重新打开上次的文献。AI 画笔和聊天直接请求 `https://api.deepseek.com/chat/completions`，需要可访问 DeepSeek 的网络，按你的 API 账户计费，不经过 ChatGPT 或本站后端。
+
+首次下载和更新需要能访问安装入口。如果所在地网络无法打开 GitHub Pages，首次安装可能需要临时使用 VPN；下载完整后，日常阅读无需 VPN。缓存被清除后需要重新下载。代码可以部署到任意 HTTPS 静态托管，入口地址与 Service Worker 范围采用相对路径，支持子目录。
+
+### 从旧网站迁移
+
+在原先使用的 Safari 标签页或主屏幕版本中打开旧站点，进入“完整备份 → 生成完整备份 → 保存或分享备份”，把 `.paperink` 文件存到 iPad“文件”。在新主屏幕版“离线与备份 → 恢复备份”选择它。
+
+完整备份包含原始 PDF、可编辑笔迹、图片、空白页/删除页状态、当前页及聊天记录。恢复前验证格式、PDF 哈希和页面引用，再以一个 IndexedDB 事务写入；恢复内容使用新文献 ID，不覆盖已有文献。普通导出 PDF 会合并批注，不能代替完整备份保留可编辑对象。
+
+Safari 标签页、主屏幕版以及不同域名的存储可能独立。不要在确认恢复成功前删除旧入口或清理网站数据。备份不包含 API Key 或尚未发送的临时 AI 标记；后者请先发送或重新标记。
+
+可申请持久保存，但浏览器不保证批准；主屏幕版本、定期完整备份和充足的设备空间可以减少数据丢失风险。更新下载完成后会显示“保存笔记并更新阅读器”，由你选择何时更新。
+
+### 构建独立离线包
+
+```bash
+pnpm build:offline
+pnpm preview:offline
+```
+
+构建输出在 `dist/offline/`，可复制到任意 HTTPS 静态网站。不要直接在“文件”中打开 `index.html`；离线缓存需要 HTTPS 网站环境。在电脑本机使用 `localhost` 也可测试，iPad 局域网访问则需要有效 HTTPS。
+
+当前 GitHub Pages 使用 `codex/offline-pages` 分支发布生成的静态文件，源码在 `main`。部署时上传 `dist/offline/` 的全部文件，包括 `sw.js`、`pdfjs/`、图标和 `.nojekyll`。每次构建自动计算内容版本并生成完整资源清单，不缓存 AI 请求。
+
+## 服务端版本部署
+
+项目使用 React、TypeScript、Vinext / Vite 和 Cloudflare Workers。服务端模式中的 AI 代理需要后端运行；独立个人离线版直接连接 DeepSeek，可部署到 GitHub Pages 等静态托管。
 
 ### Sites
 
@@ -85,7 +119,7 @@ pnpm exec wrangler secret put PAPERINK_ACCESS_CODE --config dist/server/wrangler
 
 源码仓库不包含真实 API Key、应用访问码、用户 PDF 或本机笔记。`.env*`、`.dev.vars*`、构建输出和本地运行状态均被 Git 忽略，只有不含密钥值的 `.env.example` 会提交。
 
-原始 PDF 不上传到服务端。点击发送后，服务器会把定位原文、标记附近的截图、提示词和最近聊天上下文转发给 DeepSeek。
+原始 PDF 不上传到服务端。点击发送后，个人离线版由设备把定位原文、标记附近的截图、提示词和最近聊天上下文直接交给 DeepSeek；服务端版则由服务器转发。完整备份只通过设备的下载/分享操作保存。
 
 文字坐标可以减少错行；扫描页、特殊排版、图表和公式仍需要图片识别，发送前可以核对定位结果。
 
