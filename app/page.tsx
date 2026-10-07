@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, PenLine, Plus, Redo2, Send, Sparkles, Trash2, Undo2, X } from "lucide-react";
+import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FileMinus2, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, PenLine, Plus, Redo2, Send, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createShareablePdf } from "../lib/export-pdf";
@@ -14,7 +14,9 @@ type Gesture =
   | { kind: "draw"; pointer: number; points: Point[]; pageId: string }
   | { kind: "move"; pointer: number; start: Point; before: Mark[]; after: Mark[]; pageId: string }
   | { kind: "pan"; pointer: number; x: number; y: number; left: number; top: number };
-type History = { pageId: string; before: Mark[]; after: Mark[] };
+type History =
+  | { kind: "marks"; pageId: string; before: Mark[]; after: Mark[] }
+  | { kind: "pages"; before: ReaderPage[]; after: ReaderPage[]; beforePage: number; afterPage: number };
 type Quote = { text: string; pageId: string };
 const COLORS = ["#202a35", "#d4654f", "#4c79bb", "#298f79", "#e3ba4e"];
 const uid = () => crypto.randomUUID();
@@ -26,8 +28,8 @@ function pdfImportErrorMessage(error: unknown) {
   return "PDF 导入失败，请刷新页面后重试。";
 }
 
-function ToolButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button className={`tool-button ${active ? "active" : ""}`} title={label} aria-label={label} onClick={onClick}>{children}</button>;
+function ToolButton({ label, active, disabled, onClick, children }: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button className={`tool-button ${active ? "active" : ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
 function AccessGate({ children }: { children: React.ReactNode }) {
@@ -134,6 +136,7 @@ function Reader() {
   useEffect(() => {
     let cancelled = false;
     let task: { destroy: () => Promise<void> } | null = null;
+    undoStack.current = []; redoStack.current = [];
     setPdf(null);
     if (doc) (async () => {
       const blob = await getPdf(doc.id);
@@ -179,16 +182,22 @@ function Reader() {
   const setMarks = (pageId: string, marks: Mark[]) => {
     if (!doc) return;
     const before = doc.pages.find(item => item.id === pageId)?.marks || [];
-    undoStack.current.push({ pageId, before, after: marks });
+    undoStack.current.push({ kind: "marks", pageId, before, after: marks });
     redoStack.current = [];
     updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === pageId ? { ...item, marks } : item) }));
   };
-  const applyHistory = (entry: History, marks: Mark[]) => {
-    updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === entry.pageId ? { ...item, marks } : item) }));
+  const applyHistory = (entry: History, direction: "before" | "after") => {
+    if (entry.kind === "pages") {
+      updateDoc(current => ({ ...current, pages: entry[direction], currentPage: direction === "before" ? entry.beforePage : entry.afterPage }));
+      setQuote(null); setDraft([]); setZoom(1); gesture.current = null; workspace.current?.scrollTo(0, 0);
+      setMessage(direction === "before" ? "已撤销页面操作。" : "已重做页面操作。");
+    } else {
+      updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === entry.pageId ? { ...item, marks: entry[direction] } : item) }));
+    }
     setSelected([]);
   };
-  const undo = () => { const entry = undoStack.current.pop(); if (entry) { redoStack.current.push(entry); applyHistory(entry, entry.before); } };
-  const redo = () => { const entry = redoStack.current.pop(); if (entry) { undoStack.current.push(entry); applyHistory(entry, entry.after); } };
+  const undo = () => { const entry = undoStack.current.pop(); if (entry) { redoStack.current.push(entry); applyHistory(entry, "before"); } };
+  const redo = () => { const entry = redoStack.current.pop(); if (entry) { undoStack.current.push(entry); applyHistory(entry, "after"); } };
 
   async function importPdf(file: File) {
     if (!file.name.toLowerCase().endsWith(".pdf")) { setMessage("请选择 PDF 文件。"); return; }
@@ -220,14 +229,29 @@ function Reader() {
     setSelected([]); setQuote(null); setZoom(1); workspace.current?.scrollTo(0, 0);
   }
   function addBlankPage() {
-    if (!page) return;
+    if (!doc || !page) return;
     const blank: ReaderPage = { id: uid(), sourcePage: null, width: page.width, height: page.height, marks: [] };
-    updateDoc(current => {
-      const pages = [...current.pages];
-      pages.splice(current.currentPage + 1, 0, blank);
-      return { ...current, pages, currentPage: current.currentPage + 1 };
-    });
-    setSelected([]); setMessage("已插入空白页。");
+    const pages = [...doc.pages];
+    pages.splice(doc.currentPage + 1, 0, blank);
+    const currentPage = doc.currentPage + 1;
+    undoStack.current.push({ kind: "pages", before: doc.pages, after: pages, beforePage: doc.currentPage, afterPage: currentPage });
+    redoStack.current = [];
+    updateDoc(current => ({ ...current, pages, currentPage }));
+    setSelected([]); setQuote(null); setMessage("已插入空白页。");
+  }
+  function deleteCurrentPage() {
+    if (!doc || !page || busy) return;
+    if (doc.pages.length === 1) { setMessage("文献至少需要保留一页，无法删除最后一页。"); return; }
+    const pageNumber = doc.currentPage + 1;
+    if (!confirm(`确定删除第 ${pageNumber} 页及其全部笔记吗？`)) return;
+    const pages = doc.pages.filter(item => item.id !== page.id);
+    const currentPage = Math.min(doc.currentPage, pages.length - 1);
+    undoStack.current.push({ kind: "pages", before: doc.pages, after: pages, beforePage: doc.currentPage, afterPage: currentPage });
+    redoStack.current = [];
+    updateDoc(current => ({ ...current, pages, currentPage }));
+    setSelected([]); setQuote(null); setDraft([]); setZoom(1); gesture.current = null;
+    workspace.current?.scrollTo(0, 0);
+    setMessage(`已删除第 ${pageNumber} 页，可点击撤销恢复。`);
   }
   async function addImage(file: File) {
     if (!page) return;
@@ -369,7 +393,7 @@ function Reader() {
         setSelected(ids); setMessage(ids.length ? `已选中 ${ids.length} 个对象，拖动可移动。` : "未圈中笔迹或图片。");
       } else if (tool === "ask" && active.points.length >= 3) void extractText(active.points);
     } else if (active.kind === "move") {
-      if (JSON.stringify(active.before) !== JSON.stringify(active.after)) { undoStack.current.push({ pageId: active.pageId, before: active.before, after: active.after }); redoStack.current = []; }
+      if (JSON.stringify(active.before) !== JSON.stringify(active.after)) { undoStack.current.push({ kind: "marks", pageId: active.pageId, before: active.before, after: active.after }); redoStack.current = []; }
     }
   }
   async function sendMessage() {
@@ -408,7 +432,7 @@ function Reader() {
     <div className="app-body">
       {libraryOpen && <aside className="library-panel"><div className="panel-heading"><div><span className="eyebrow">LIBRARY</span><h2>文献库</h2></div><button className="plain-icon compact" aria-label="关闭文献库" onClick={() => setLibraryOpen(false)}><X size={18} /></button></div><button className="import-button" disabled={busy} onClick={() => pdfInput.current?.click()}><Plus size={18} />导入 PDF 文献</button><div className="library-caption">最近阅读 <span>{library.length}</span></div><div className="library-list">{library.length ? library.map(item => <div className={`library-item ${doc?.id === item.id ? "selected" : ""}`} key={item.id}><button className="library-open" onClick={() => { setDoc(item); setSelected([]); setQuote(null); setLibraryOpen(false); }}><span className="book-thumb"><BookOpen size={22} /></span><span className="book-info"><strong>{item.name}</strong><small>{item.pages.length} 页 · {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small></span></button><button className="delete-small" title="删除文献" aria-label={`删除 ${item.name}`} onClick={() => void removeDoc(item.id)}><Trash2 size={15} /></button></div>) : <div className="library-empty"><FolderOpen size={28} /><p>还没有文献</p><small>导入 PDF 后，笔记会自动保存在这台设备。</small></div>}</div><div className="library-footer"><span>◈</span><p>文献和笔记仅存于本机。提问会发送所选文字；扫描页识别会发送局部截图至 DeepSeek。</p></div></aside>}
       <section className="reader-area">{doc && page ? <>
-        <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="圈选问 AI" active={tool === "ask"} onClick={() => setTool("ask")}><Sparkles size={19} /></ToolButton></div><span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
+        <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="圈选问 AI" active={tool === "ask"} onClick={() => setTool("ask")}><Sparkles size={19} /></ToolButton></div><span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="删除当前页" disabled={busy} onClick={deleteCurrentPage}><FileMinus2 size={18} /></ToolButton><ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
         <div className="reader-hint"><i />{tool === "ask" ? "用 Apple Pencil 圈住想问的句子，提取后可修改原文并补充问题" : tool === "lasso" ? "圈住笔迹或图片后拖动；手指可移动页面" : tool === "eraser" ? "点按笔迹或图片即可擦除" : "Apple Pencil 书写，手指移动页面"}</div>
         <div ref={workspace} className="workspace"><div className="paper" style={{ width: page.width * scale, height: page.height * scale }}><canvas ref={canvas} className="pdf-canvas" /><svg className="ink-layer" width={page.width * scale} height={page.height * scale} viewBox={`0 0 ${page.width} ${page.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>{page.marks.map(mark => mark.type === "stroke" ? <path key={mark.id} d={pathFromPoints(mark.points)} fill="none" stroke={mark.color} strokeWidth={mark.width} strokeLinecap="round" strokeLinejoin="round" opacity={mark.tool === "highlighter" ? 0.38 : 1} /> : <image key={mark.id} href={mark.src} x={mark.x} y={mark.y} width={mark.width} height={mark.height} preserveAspectRatio="none" />)}{selectionBounds && <rect x={selectionBounds.x - 8} y={selectionBounds.y - 8} width={selectionBounds.width + 16} height={selectionBounds.height + 16} rx="5" fill="none" stroke="#537abc" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" />}{draft.length > 0 && <path d={pathFromPoints(draft, tool === "ask" || tool === "lasso")} fill={tool === "ask" ? "rgba(82,118,195,.1)" : "none"} stroke={tool === "ask" ? "#577fc5" : tool === "lasso" ? "#537abc" : color} strokeWidth={tool === "ask" || tool === "lasso" ? 2 : width} strokeDasharray={tool === "lasso" ? "5 4" : undefined} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}</svg></div></div>
         <footer className="page-footer"><div className="page-navigation"><button aria-label="上一页" disabled={doc.currentPage === 0} onClick={() => changePage(doc.currentPage - 1)}><ChevronLeft size={19} /></button><span><strong>{doc.currentPage + 1}</strong> / {doc.pages.length}</span><button aria-label="下一页" disabled={doc.currentPage === doc.pages.length - 1} onClick={() => changePage(doc.currentPage + 1)}><ChevronRight size={19} /></button></div><div className="zoom-controls"><button aria-label="缩小" onClick={() => setZoom(value => clamp(value - 0.15, 0.5, 3))}><Minus size={17} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => setZoom(value => clamp(value + 0.15, 0.5, 3))}><Plus size={17} /></button></div></footer>
