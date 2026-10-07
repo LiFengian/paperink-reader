@@ -21,7 +21,7 @@ export function PersonalControls({ personal, current, disabled, onRestored }: { 
     if (!personal) return;
     if (!window.isSecureContext || !("serviceWorker" in navigator)) { setOffline("离线准备失败：请使用 Safari 打开 HTTPS 地址。"); return; }
     let cancelled = false, registration: ServiceWorkerRegistration | undefined;
-    const update = () => { if (cancelled) return; if (registration?.active) setOffline("离线资源已就绪"); if (registration?.waiting) setWaiting(registration.waiting); };
+    const update = () => { if (cancelled) return; if (registration?.active) setOffline("离线资源已就绪"); setWaiting(registration?.waiting ?? null); };
     const changed = () => update();
     const found = () => {
       const worker = registration?.installing;
@@ -63,8 +63,11 @@ export function PersonalControls({ personal, current, disabled, onRestored }: { 
     setWorking(true);
     try {
       if (current) await saveDocument(current);
+      const registration = await navigator.serviceWorker.getRegistration();
+      const next = registration?.waiting;
+      if (!next) { setWaiting(null); setWorking(false); setNotice("当前版本已就绪；新版本下载完成后可更新。"); return; }
       navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload(), { once: true });
-      waiting.postMessage({ type: "ACTIVATE_UPDATE" });
+      next.postMessage({ type: "ACTIVATE_UPDATE" });
     } catch { setWorking(false); setNotice("当前笔记保存失败，请先备份再更新。"); }
   }
   async function persist() {
