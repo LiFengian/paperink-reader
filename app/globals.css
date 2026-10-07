@@ -91,6 +91,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .paper{flex:none;margin:auto;position:relative;background:#fff;box-shadow:0 8px 26px rgba(46,56,60,.13),0 0 1px rgba(46,56,60,.19)}
 .pdf-canvas{display:block;position:absolute;inset:0}
 .ink-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+.workspace,.workspace *{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}.workspace{overscroll-behavior:none;overflow-anchor:none}.workspace.writing-mode{overflow:hidden}.workspace .pdf-canvas{pointer-events:none}.workspace.navigation-mode .ink-layer{cursor:grab}.workspace.navigation-mode .ink-layer:active{cursor:grabbing}
 .page-footer{height:54px;flex:none;display:flex;align-items:center;justify-content:center;position:relative;background:#fff;border-top:1px solid #e9edeb}
 .page-navigation,.zoom-controls{display:flex;align-items:center;gap:15px;font-size:12px;color:#8c989e}
 .page-navigation button,.zoom-controls button{width:29px;height:29px;border:0;background:transparent;color:#586a70;display:grid;place-items:center;border-radius:7px}

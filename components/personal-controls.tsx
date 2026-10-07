@@ -6,6 +6,7 @@ import { getPersonalKey, setPersonalKey } from "../lib/ai-client";
 import { createLibraryBackup, importLibraryBackup, shareBackup } from "../lib/library-backup";
 import { saveDocument } from "../lib/local-store";
 import type { ReaderDocument } from "../lib/reader-types";
+import { version } from "../package.json";
 
 export function PersonalControls({ personal, current, disabled, onRestored }: { personal: boolean; current: ReaderDocument | null; disabled: boolean; onRestored: () => Promise<void> }) {
   const [open, setOpen] = useState(false), [key, setKey] = useState("");
@@ -76,7 +77,7 @@ export function PersonalControls({ personal, current, disabled, onRestored }: { 
     {personal && <span className={`offline-pill ${offline === "离线资源已就绪" ? "ready" : ""}`} role="status" title={offline}>{offline === "离线资源已就绪" ? "离线就绪" : offline.startsWith("正在") ? "离线准备中" : "离线未就绪"}</span>}
     {open && <div className="modal-backdrop" onClick={() => { if (!working) setOpen(false); }}><section className="help-modal personal-modal" role="dialog" aria-modal="true" aria-labelledby="personal-title" onClick={event => event.stopPropagation()}>
       <button className="modal-close" aria-label="关闭离线与备份" disabled={working} onClick={() => setOpen(false)}><X size={20} /></button>
-      <span className="eyebrow">YOUR PERSONAL LIBRARY</span><h2 id="personal-title">{personal ? "离线与备份" : "完整备份与迁移"}</h2>
+      <span className="eyebrow">墨读 {version}</span><h2 id="personal-title">{personal ? "离线与备份" : "完整备份与迁移"}</h2>
       {personal && <>
         <div className="personal-section"><h3>离线阅读</h3><p className="offline-state" role="status">{offline}</p><p>Safari → 分享 → 添加到主屏幕。首次下载完成后，从主屏幕打开即可离线阅读、写画和导出。AI 提问需要网络连接。</p>
           {waiting && <button className="personal-action" disabled={working} onClick={() => void updateApp()}>保存笔记并更新阅读器</button>}

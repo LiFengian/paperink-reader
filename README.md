@@ -66,7 +66,7 @@ pnpm build
 3. 在“离线与备份 → DeepSeek 设置”填写自己的 API Key。Key 仅保存在当前设备，不写入源码、服务器、离线资源缓存或文献库备份。
 4. 导入 PDF，或恢复旧入口导出的 `.paperink` 完整备份。
 
-日常从主屏幕打开后，即使托管入口暂时无法访问，也能读 PDF、手写批注、套索整理、插入/删除页、插入图片和导出 PDF；会重新打开上次的文献。AI 画笔和聊天直接请求 `https://api.deepseek.com/chat/completions`，需要可访问 DeepSeek 的网络，按你的 API 账户计费，不经过 ChatGPT 或本站后端。
+日常从主屏幕打开后，即使托管入口暂时无法访问，也能读 PDF、手写批注（书写时锁定页面、忽略手掌；移动请先选手掌工具）、套索整理、插入/删除页、插入图片和导出 PDF；会重新打开上次的文献。AI 画笔和聊天直接请求 `https://api.deepseek.com/chat/completions`，需要可访问 DeepSeek 的网络，按你的 API 账户计费，不经过 ChatGPT 或本站后端。
 
 首次下载和更新需要能访问安装入口。如果所在地网络无法打开 GitHub Pages，首次安装可能需要临时使用 VPN；下载完整后，日常阅读无需 VPN。缓存被清除后需要重新下载。代码可以部署到任意 HTTPS 静态托管，入口地址与 Service Worker 范围采用相对路径，支持子目录。
 
