@@ -135,10 +135,16 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .typing-indicator i:nth-child(2){animation-delay:.2s}.typing-indicator i:nth-child(3){animation-delay:.4s}
 @keyframes pulse{50%{opacity:.2;transform:translateY(-3px)}}
 .chat-composer{flex:none;padding:12px 13px 17px;border-top:1px solid #ecf0ed;background:#fff}
-.quote-editor{border:1px solid #dbeadf;border-radius:9px;background:#f5faf6;margin-bottom:9px;padding:8px}
-.quote-editor>div{display:flex;justify-content:space-between;align-items:center;color:#4c8066;font-size:10px;font-weight:700}
-.quote-editor button{border:0;background:transparent;color:#688776}
-.quote-editor textarea{width:100%;resize:vertical;border:0;background:transparent;outline:none;color:#52675c;line-height:1.5;font-size:11px;margin-top:4px}
+.reader-hint-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-question-ready{flex:none;border:1px solid #d6e0f6;border-radius:6px;padding:3px 8px;background:#edf2ff;color:#436ed5;font-size:10px}
+.ai-mark-summary{border:1px solid #dbe4fb;border-radius:10px;background:#f3f6ff;margin-bottom:10px;padding:10px;color:#4668ae}
+.ai-mark-summary>div{display:flex;align-items:center;gap:7px;font-size:12px}
+.ai-mark-summary>div>span{margin-left:auto;color:#889ac0;font-size:10px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-mark-summary p{margin:8px 0;font-size:10px;line-height:1.5;color:#8393b2}
+.ai-mark-actions button{display:flex;align-items:center;gap:4px;border:0;background:transparent;padding:3px;color:#5d79b4;font-size:10px}
+.ai-mark-actions button:last-child{margin-left:auto}
+.message-images{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.message-images img{display:block;width:100%;max-height:180px;object-fit:contain;background:#fff;border:1px solid #dbe3e0;border-radius:5px}
 .composer-box{border:1px solid #dbe3de;border-radius:11px;padding:9px;background:#fff}
 .composer-box:focus-within{border-color:#a3c7b5;box-shadow:0 0 0 3px rgba(80,143,108,.08)}
 .composer-box textarea{resize:none;width:100%;border:0;outline:0;color:#364d4b;font-size:12px;line-height:1.5}

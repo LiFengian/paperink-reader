@@ -35,7 +35,10 @@ export type ChatMessage = {
   content: string;
   pageId?: string;
   quotedText?: string;
+  images?: string[];
 };
+
+export type AiMark = { id: string; pageId: string; points: Point[] };
 
 export type ReaderDocument = {
   id: string;

@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   }
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) return NextResponse.json({ error: "站点尚未配置 DeepSeek API Key。" }, { status: 503 });
-  if (Number(request.headers.get("content-length") || 0) > 3_000_000) {
+  if (Number(request.headers.get("content-length") || 0) > 8_000_000) {
     return NextResponse.json({ error: "请求内容过大。" }, { status: 413 });
   }
 
@@ -32,6 +32,11 @@ export async function POST(request: NextRequest) {
         ] },
       ];
     } else {
+      const images = body.images === undefined ? [] : body.images;
+      if (!Array.isArray(images) || images.length > 6 || images.some(image => typeof image !== "string" || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length > 1_500_000)
+        || images.reduce((total: number, image: string) => total + image.length, 0) > 6_000_000) {
+        return NextResponse.json({ error: "标记图片无效或过大，请减少标记后重试。" }, { status: 400 });
+      }
       const rawMessages = body.messages;
       if (!Array.isArray(rawMessages) || rawMessages.length === 0 || rawMessages.length > 20) {
         return NextResponse.json({ error: "聊天记录无效。" }, { status: 400 });
@@ -44,8 +49,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "请输入问题。" }, { status: 400 });
       }
       messages = [
-        { role: "system", content: "你是学术文献阅读助手。优先准确解释用户提供的原文、术语、方法和推导。区分原文明确陈述与自己的推断；不虚构论文内容或引用。默认用中文回答，必要时保留英文术语和公式。" },
-        ...safe,
+        { role: "system", content: "你是学术文献阅读助手。优先准确解释用户提供的原文、术语、方法和推导。图片中的亮蓝色画笔线条、圆圈和标记表示用户关注的内容：划线对应的文字、圈内内容或标记旁的对象。按用户提示词解答，可用周边内容理解上下文；不要把截图内全部内容都当成提问对象。如果标记对象不清楚，请明确说明并询问，不要猜测。区分原文明确陈述与自己的推断；不虚构论文内容或引用。默认用中文回答，必要时保留英文术语和公式。" },
+        ...safe.slice(0, -1),
+        { role: "user", content: images.length ? [
+          { type: "text", text: safe.at(-1)!.content },
+          ...images.map(image => ({ type: "image_url", image_url: { url: image, detail: "original" } })),
+        ] : safe.at(-1)!.content },
       ];
     }
 
