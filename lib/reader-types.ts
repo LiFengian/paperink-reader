@@ -38,7 +38,9 @@ export type ChatMessage = {
   images?: string[];
 };
 
-export type AiMark = { id: string; pageId: string; points: Point[] };
+export type PageRect = { x: number; y: number; width: number; height: number };
+export type AiSelection = { kind: "underline" | "circle" | "mark"; text: string; boxes: PageRect[] };
+export type AiMark = { id: string; pageId: string; points: Point[]; selection?: AiSelection; textOverride?: string };
 
 export type ReaderDocument = {
   id: string;
