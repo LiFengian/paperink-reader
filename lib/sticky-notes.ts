@@ -9,3 +9,9 @@ export function createStickyNote(page: ReaderPage, point: Point): NoteMark {
     width, height, text: "", strokes: [], noteWidth: 480, noteHeight: 320,
   };
 }
+
+export function moveStickyNote(note: NoteMark, delta: Point, page: Pick<ReaderPage, "width" | "height">): NoteMark {
+  const x = Math.max(0, Math.min(page.width - note.width, note.x + delta.x));
+  const y = Math.max(0, Math.min(page.height - note.height, note.y + delta.y));
+  return x === note.x && y === note.y ? note : { ...note, x, y };
+}

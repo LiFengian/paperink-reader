@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PDFDocument, PDFDict, PDFHexString, PDFName } from "pdf-lib";
-import { createStickyNote } from "../lib/sticky-notes.ts";
+import { createStickyNote, moveStickyNote } from "../lib/sticky-notes.ts";
 import { markBounds, markInPolygon, movedMark } from "../lib/geometry.ts";
 import { eraseMarks } from "../lib/eraser.ts";
 import { createShareablePdf } from "../lib/export-pdf.ts";
@@ -29,6 +29,13 @@ test("backup validation accepts text and ink notes, rejects malformed nested ink
   assert.throws(() => validateBackupDocument(invalid({ strokes: [{ ...ink, points: [{ x: NaN, y: 0 }] }] })), /格式不受支持/);
   assert.throws(() => validateBackupDocument(invalid({ strokes: [ink, ink] })), /格式不受支持/);
   assert.throws(() => validateBackupDocument(invalid({ text: null })), /格式不受支持/);
+});
+
+test("direct marker drag keeps the whole marker inside the page and preserves text and handwriting", () => {
+  const moved = moveStickyNote(note, { x: 1000, y: -1000 }, page);
+  assert.equal(moved.x + moved.width, page.width); assert.equal(moved.y, 0);
+  assert.equal(moved.text, note.text); assert.equal(moved.strokes, note.strokes);
+  assert.equal(moveStickyNote(note, { x: 0, y: 0 }, page), note);
 });
 
 test("PDF export preserves Chinese note text and appends handwritten note contents", async () => {

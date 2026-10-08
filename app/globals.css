@@ -91,7 +91,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .paper{flex:none;margin:auto;position:relative;background:#fff;box-shadow:0 8px 26px rgba(46,56,60,.13),0 0 1px rgba(46,56,60,.19)}
 .pdf-canvas{display:block;position:absolute;inset:0}
 .live-ink-canvas{position:absolute;pointer-events:none;z-index:3;visibility:hidden}
-.sticky-note-marker{cursor:pointer;outline:none}.sticky-note-marker:focus>path:first-of-type{stroke:#427c63;stroke-width:2}
+.sticky-note-marker{cursor:grab;outline:none}.sticky-note-marker.dragging{cursor:grabbing}.sticky-note-marker:focus>path:first-of-type{stroke:#427c63;stroke-width:2}
 .sticky-note-backdrop{position:fixed;inset:0;z-index:65;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(31,45,41,.24);backdrop-filter:blur(3px)}
 .sticky-note-dialog{width:min(560px,100%);max-height:calc(100dvh - 36px);overflow:auto;border:1px solid #e8d8a3;border-radius:17px;background:#fffcf0;box-shadow:0 20px 70px rgba(40,43,28,.23);padding:20px;outline:none}
 .sticky-note-heading{display:flex;align-items:center;gap:10px;margin-bottom:17px}.sticky-note-heading h2{margin:0 0 4px;color:#5d4d29;font-size:20px}.sticky-note-heading small{color:#9b8e70;font-size:11px}.sticky-note-heading>.plain-icon{margin-left:auto;flex:none}.sticky-note-symbol{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:#fff0b5;color:#a07b31}

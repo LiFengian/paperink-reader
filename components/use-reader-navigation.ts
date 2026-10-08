@@ -122,5 +122,5 @@ export function useReaderNavigation(options: Options) {
       const paper = current.current.canvas.current?.parentElement; if (paper) { paper.style.transform = ""; paper.style.transition = ""; }
     };
   }, [options.identity, options.enabled]);
-  return { start, move, end, zoomBy };
+  return { start, move, end, zoomBy, stop: stopMomentum };
 }
