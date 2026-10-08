@@ -1,27 +1,43 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 export type PaperContext = { text: string; pageCount: number; emptyPages: number[] };
-const cache = new WeakMap<PDFDocumentProxy, Promise<PaperContext>>();
-export function readWholePaper(pdf: PDFDocumentProxy, progress?: (page: number, total: number) => void): Promise<PaperContext> {
-  const existing = cache.get(pdf); if (existing) return existing;
-  const task = (async () => {
+type ReadOptions = { background?: boolean; isBusy?: () => boolean; isCancelled?: () => boolean };
+type ReadTask = { promise: Promise<PaperContext>; foreground: boolean; isCancelled?: () => boolean };
+const cache = new WeakMap<PDFDocumentProxy, ReadTask>();
+export function readWholePaper(pdf: PDFDocumentProxy, progress?: (page: number, total: number) => void, options: ReadOptions = {}): Promise<PaperContext> {
+  const existing = cache.get(pdf);
+  if (existing && (existing.foreground || !existing.isCancelled?.())) {
+    if (!options.background) existing.foreground = true; return existing.promise;
+  }
+  const state = { foreground: !options.background, isCancelled: options.isCancelled } as ReadTask;
+  const allowInput = async () => {
+    while (!state.foreground) {
+      if (options.isCancelled?.()) throw new Error("全文准备已取消。");
+      if (!options.isBusy?.()) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+  const task = Promise.resolve().then(async () => {
     const pages: string[] = [], emptyPages: number[] = [];
     let size = 0;
     for (let index = 1; index <= pdf.numPages; index++) {
+      await allowInput();
       const page = await pdf.getPage(index), content = await page.getTextContent();
+      await allowInput();
       const text = content.items.map(item => "str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "").join("").replace(/[ \t]+\n/g, "\n").trim();
       if (!text) emptyPages.push(index);
       pages.push(`【原始 PDF 第 ${index} 页】\n${text || "本页没有可提取文字；图表或扫描内容尚未读取。"}`);
       size += text.length;
       if (size > 700_000) throw new Error("文献文字超过当前全文输入预算。请拆分文献后再进行全文提问；不会静默截断全文。");
       progress?.(index, pdf.numPages);
-      // Let pointer input and rendering run between pages.
-      await new Promise(resolve => setTimeout(resolve, 0));
+      // Background preparation waits for a pause in handwriting. A question
+      // promotes the same task so its answer never waits for the pen to stop.
+      await new Promise(resolve => setTimeout(resolve, state.foreground ? 0 : 16));
     }
     return { text: pages.join("\n\n"), pageCount: pdf.numPages, emptyPages };
-  })();
-  cache.set(pdf, task);
-  void task.catch(() => cache.delete(pdf));
+  });
+  state.promise = task; cache.set(pdf, state);
+  void task.catch(() => { if (cache.get(pdf) === state) cache.delete(pdf); });
   return task;
 }
 

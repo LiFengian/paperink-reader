@@ -10,6 +10,7 @@ import { eraseMarks } from "../lib/eraser";
 import type { EraserMode } from "../lib/eraser";
 import { readWholePaper, paperReference } from "../lib/paper-context";
 import { getAiSettings } from "../lib/ai-client";
+import { InkMarks } from "../components/ink-marks";
 import { PersonalControls } from "../components/personal-controls";
 import { askAi } from "../lib/ai-client";
 import { pdfRaster } from "../lib/pdf-raster";
@@ -22,7 +23,7 @@ import type { AiMark, AiSelection, ChatMessage, Mark, Point, ReaderDocument, Rea
 
 type Gesture =
   | { kind: "draw"; pointer: number; points: Point[]; pageId: string; tool: ToolName; color: string; width: number; left: number; top: number; scale: number; pageWidth: number; pageHeight: number }
-  | { kind: "move"; pointer: number; start: Point; before: Mark[]; after: Mark[]; pageId: string }
+  | { kind: "move"; pointer: number; start: Point; before: Mark[]; after: Mark[]; pageId: string; dx: number; dy: number }
   | { kind: "erase"; pointer: number; pageId: string; before: Mark[]; after: Mark[]; previous: Point; radius: number; mode: EraserMode };
 type History =
   | { kind: "marks"; pageId: string; before: Mark[]; after: Mark[] }
@@ -119,6 +120,10 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const [chatOpen, setChatOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const previewPath = useRef<SVGPathElement>(null);
+  const liveInk = useRef<HTMLCanvasElement>(null);
+  const liveIndex = useRef(0);
+  const movePreview = useRef<SVGGElement>(null);
+  const lastInput = useRef(0);
   const previewFrame = useRef<number | null>(null);
   const [aiMarks, setAiMarks] = useState<AiMark[]>([]);
   const [aiRedoMarks, setAiRedoMarks] = useState<AiMark[]>([]);
@@ -142,7 +147,12 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const page = doc?.pages[doc.currentPage] || null;
   const fit = page ? Math.min((viewSize.width - 48) / page.width, 3) : 1;
   const scale = Math.max(0.25, fit * zoom);
-  const selectionBounds = useMemo(() => markBounds(page?.marks.filter(mark => selected.includes(mark.id)) || []), [page, selected]);
+  const markGroups = useMemo(() => {
+    const all = page?.marks || [];
+    if (!selected.length) return { normal: all, selected: [] as Mark[] };
+    const ids = new Set(selected); return { normal: all.filter(mark => !ids.has(mark.id)), selected: all.filter(mark => ids.has(mark.id)) };
+  }, [page?.marks, selected]);
+  const selectionBounds = useMemo(() => markBounds(markGroups.selected), [markGroups.selected]);
   const aiPageNumbers = doc?.pages.flatMap((item, index) => aiMarks.some(mark => mark.pageId === item.id) ? [index + 1] : []) || [];
 
   function refreshVisiblePdf() {
@@ -166,8 +176,13 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   }, []);
   useEffect(() => {
     let cancelled = false;
+    let lastProgress = 0;
     if (!pdf) { setPaperStatus("正在准备全文…"); return; }
-    void readWholePaper(pdf, (index, total) => { if (!cancelled) setPaperStatus(`正在准备全文 ${index}/${total} 页…`); })
+    void readWholePaper(pdf, (index, total) => {
+      if (!cancelled && (index === total || performance.now() - lastProgress > 250)) {
+        lastProgress = performance.now(); setPaperStatus(`正在准备全文 ${index}/${total} 页…`);
+      }
+    }, { background: true, isBusy: () => !!gesture.current || performance.now() - lastInput.current < 500, isCancelled: () => cancelled })
       .then(context => { if (!cancelled) setPaperStatus(`全文文字已准备 · ${context.pageCount} 页${context.emptyPages.length ? ` · ${context.emptyPages.length} 页无文字层` : ""}`); })
       .catch(error => { if (!cancelled) setPaperStatus((error as Error).message || "全文准备失败，请重新打开文献。"); });
     return () => { cancelled = true; };
@@ -189,6 +204,10 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     };
   }, [!!doc]);
   useEffect(() => () => { if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current); if (viewportFrame.current !== null) clearTimeout(viewportFrame.current); if (editFrame.current !== null) cancelAnimationFrame(editFrame.current); }, []);
+  useEffect(() => {
+    const live = liveInk.current;
+    if (live) { live.style.visibility = "hidden"; live.width = 1; live.height = 1; }
+  }, [page?.id]);
 
   useEffect(() => {
     listDocuments().then(items => {
@@ -257,28 +276,30 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       const visible = canvas.current!;
       if (renderedPage.current !== page.id) { visible.style.visibility = "hidden"; renderedPage.current = page.id; }
       const target = window.document.createElement("canvas");
-      const raster = pdfRaster(renderWindow.width, renderWindow.height, devicePixelRatio);
-      const ratio = raster.ratio;
-      target.width = raster.width;
-      target.height = raster.height;
-      target.style.width = `${renderWindow.width}px`;
-      target.style.height = `${renderWindow.height}px`;
-      target.style.left = `${renderWindow.x}px`; target.style.top = `${renderWindow.y}px`;
-      const context = target.getContext("2d");
-      if (!context) return;
-      context.fillStyle = "white";
-      context.fillRect(0, 0, target.width, target.height);
-      if (page.sourcePage !== null && pdf) {
-        const sourcePage = await pdf.getPage(page.sourcePage);
+      try {
+        const raster = pdfRaster(renderWindow.width, renderWindow.height, devicePixelRatio);
+        const ratio = raster.ratio;
+        target.width = raster.width;
+        target.height = raster.height;
+        target.style.width = `${renderWindow.width}px`;
+        target.style.height = `${renderWindow.height}px`;
+        target.style.left = `${renderWindow.x}px`; target.style.top = `${renderWindow.y}px`;
+        const context = target.getContext("2d");
+        if (!context) return;
+        context.fillStyle = "white";
+        context.fillRect(0, 0, target.width, target.height);
+        if (page.sourcePage !== null && pdf) {
+          const sourcePage = await pdf.getPage(page.sourcePage);
+          if (cancelled) return;
+          rendering = sourcePage.render({ canvas: target, canvasContext: context, viewport: sourcePage.getViewport({ scale }), transform: [ratio, 0, 0, ratio, -renderWindow.x * ratio, -renderWindow.y * ratio] });
+          await rendering.promise;
+        }
         if (cancelled) return;
-        rendering = sourcePage.render({ canvas: target, canvasContext: context, viewport: sourcePage.getViewport({ scale }), transform: [ratio, 0, 0, ratio, -renderWindow.x * ratio, -renderWindow.y * ratio] });
-        await rendering.promise;
-      }
-      if (cancelled) return;
-      visible.width = target.width; visible.height = target.height;
-      visible.style.width = target.style.width; visible.style.height = target.style.height;
-      visible.style.left = target.style.left; visible.style.top = target.style.top;
-      visible.getContext("2d")?.drawImage(target, 0, 0); visible.style.visibility = "visible";
+        visible.width = target.width; visible.height = target.height;
+        visible.style.width = target.style.width; visible.style.height = target.style.height;
+        visible.style.left = target.style.left; visible.style.top = target.style.top;
+        visible.getContext("2d")?.drawImage(target, 0, 0); visible.style.visibility = "visible";
+      } finally { rendering = null; target.width = 1; target.height = 1; }
     })().catch(error => { if (!cancelled && error?.name !== "RenderingCancelledException") setMessage("这一页渲染失败。"); });
     return () => { cancelled = true; rendering?.cancel(); };
   }, [pdf, page?.id, page?.sourcePage, page?.width, page?.height, scale, renderWindow]);
@@ -290,14 +311,16 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     visible.width = 1; visible.height = 1;
     void (async () => {
       const target = window.document.createElement("canvas");
-      const density = Math.min(1.5, Math.sqrt(2_000_000 / (page.width * page.height * fit * fit)));
-      target.width = Math.max(1, Math.floor(page.width * fit * density)); target.height = Math.max(1, Math.floor(page.height * fit * density));
-      const context = target.getContext("2d")!; context.fillStyle = "white"; context.fillRect(0, 0, target.width, target.height);
-      if (pdf && page.sourcePage !== null) {
-        const source = await pdf.getPage(page.sourcePage); if (cancelled) return;
-        task = source.render({ canvas: target, canvasContext: context, viewport: source.getViewport({ scale: fit * density }) }); await task.promise;
-      }
-      if (!cancelled) { visible.width = target.width; visible.height = target.height; visible.getContext("2d")?.drawImage(target, 0, 0); }
+      try {
+        const density = Math.min(1.5, Math.sqrt(2_000_000 / (page.width * page.height * fit * fit)));
+        target.width = Math.max(1, Math.floor(page.width * fit * density)); target.height = Math.max(1, Math.floor(page.height * fit * density));
+        const context = target.getContext("2d")!; context.fillStyle = "white"; context.fillRect(0, 0, target.width, target.height);
+        if (pdf && page.sourcePage !== null) {
+          const source = await pdf.getPage(page.sourcePage); if (cancelled) return;
+          task = source.render({ canvas: target, canvasContext: context, viewport: source.getViewport({ scale: fit * density }) }); await task.promise;
+        }
+        if (!cancelled) { visible.width = target.width; visible.height = target.height; visible.getContext("2d")?.drawImage(target, 0, 0); }
+      } finally { task = null; target.width = 1; target.height = 1; }
     })().catch(() => { /* The sharp renderer reports an actual page failure. */ });
     return () => { cancelled = true; task?.cancel(); };
   }, [pdf, page?.id, page?.sourcePage, fit]);
@@ -435,16 +458,41 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   function clearPreview() {
     if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
     previewFrame.current = null; previewPath.current?.setAttribute("d", "");
+    if (liveInk.current) liveInk.current.style.visibility = "hidden";
+    liveIndex.current = 0;
+  }
+  function prepareLiveInk(active: Extract<Gesture, { kind: "draw" }>) {
+    const canvas = liveInk.current, viewport = workspace.current;
+    if (!canvas || !viewport || active.tool === "lasso") return;
+    const box = viewport.getBoundingClientRect(), x = Math.max(0, box.left - active.left), y = Math.max(0, box.top - active.top);
+    const width = Math.max(1, Math.min(active.pageWidth * active.scale - x, box.width)), height = Math.max(1, Math.min(active.pageHeight * active.scale - y, box.height));
+    const ratio = Math.min(devicePixelRatio || 1, 2, Math.sqrt(3_000_000 / (width * height)));
+    const pixelsX = Math.ceil(width * ratio), pixelsY = Math.ceil(height * ratio);
+    if (canvas.width !== pixelsX) canvas.width = pixelsX;
+    if (canvas.height !== pixelsY) canvas.height = pixelsY;
+    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`; canvas.style.left = `${x}px`; canvas.style.top = `${y}px`;
+    canvas.style.visibility = "visible"; canvas.style.opacity = active.tool === "highlighter" ? "0.38" : "1";
+    const context = canvas.getContext("2d")!;
+    context.setTransform(1, 0, 0, 1, 0, 0); context.clearRect(0, 0, canvas.width, canvas.height);
+    context.setTransform(ratio * active.scale, 0, 0, ratio * active.scale, -x * ratio, -y * ratio);
+    context.strokeStyle = active.tool === "ask" ? "#436ed5" : active.color; context.fillStyle = context.strokeStyle;
+    context.lineWidth = active.tool === "ask" ? 1.6 : active.width; context.lineCap = "round"; context.lineJoin = "round";
+    liveIndex.current = 0;
   }
   function paintPreview() {
     previewFrame.current = null;
-    const active = gesture.current, path = previewPath.current;
-    if (!path || active?.kind !== "draw") return;
-    path.setAttribute("d", pathFromPoints(active.points, active.tool === "lasso"));
-    path.setAttribute("stroke", active.tool === "ask" ? "#436ed5" : active.tool === "lasso" ? "#537abc" : active.color);
-    path.setAttribute("stroke-width", String(active.tool === "ask" ? 1.6 : active.tool === "lasso" ? 2 : active.width));
-    path.setAttribute("stroke-dasharray", active.tool === "lasso" ? "5 4" : "none");
-    path.setAttribute("opacity", active.tool === "highlighter" ? "0.38" : "1");
+    const active = gesture.current;
+    if (active?.kind !== "draw") return;
+    if (active.tool === "lasso") {
+      const path = previewPath.current;
+      path?.setAttribute("d", pathFromPoints(active.points, true)); path?.setAttribute("stroke", "#537abc"); path?.setAttribute("stroke-width", "2"); path?.setAttribute("stroke-dasharray", "5 4"); return;
+    }
+    const context = liveInk.current?.getContext("2d"); if (!context) return;
+    if (!liveIndex.current) { const point = active.points[0]; context.beginPath(); context.arc(point.x, point.y, context.lineWidth / 2, 0, Math.PI * 2); context.fill(); liveIndex.current = 1; }
+    if (liveIndex.current >= active.points.length) return;
+    const start = active.points[liveIndex.current - 1]; context.beginPath(); context.moveTo(start.x, start.y);
+    for (let index = liveIndex.current; index < active.points.length; index++) context.lineTo(active.points[index].x, active.points[index].y);
+    context.stroke(); liveIndex.current = active.points.length;
   }
   function appendSamples(event: ReactPointerEvent<SVGSVGElement>, active: Extract<Gesture, { kind: "draw" }>) {
     const samples = event.nativeEvent.getCoalescedEvents?.() || [];
@@ -455,6 +503,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     }
   }
   function onPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    lastInput.current = performance.now();
     if (!page || !workspace.current || (tool === "ask" && busy)) return;
     if (navigation.start(event)) return;
     event.preventDefault();
@@ -470,18 +519,19 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
         return;
       }
       if (tool === "lasso" && selectionBounds && point.x >= selectionBounds.x - 12 && point.x <= selectionBounds.x + selectionBounds.width + 12 && point.y >= selectionBounds.y - 12 && point.y <= selectionBounds.y + selectionBounds.height + 12) {
-        gesture.current = { kind: "move", pointer: event.pointerId, start: point, before: page.marks, after: page.marks, pageId: page.id };
+        gesture.current = { kind: "move", pointer: event.pointerId, start: point, before: page.marks, after: page.marks, pageId: page.id, dx: 0, dy: 0 };
       } else {
         if (tool === "lasso") setSelected([]);
         const bounds = event.currentTarget.getBoundingClientRect();
         gesture.current = { kind: "draw", pointer: event.pointerId, points: [point], pageId: page.id, tool, color: tool === "highlighter" && color === COLORS[0] ? "#e9c84f" : color, width: tool === "highlighter" ? width * 6 : width, left: bounds.left, top: bounds.top, scale, pageWidth: page.width, pageHeight: page.height };
-        paintPreview();
+        prepareLiveInk(gesture.current as Extract<Gesture, { kind: "draw" }>); paintPreview();
       }
     }
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Native capture can already have ended. */ }
     event.preventDefault();
   }
   function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    lastInput.current = performance.now();
     if (navigation.move(event)) return;
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId || !page || !workspace.current) return;
@@ -494,9 +544,8 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       if (previewFrame.current === null) previewFrame.current = requestAnimationFrame(paintPreview);
     } else {
       const point = eventPoint(event), dx = point.x - active.start.x, dy = point.y - active.start.y;
-      const moved = active.before.map(mark => selected.includes(mark.id) ? movedMark(mark, dx, dy) : mark);
-      active.after = moved;
-      if (editFrame.current === null) editFrame.current = requestAnimationFrame(previewEditing);
+      active.dx = dx; active.dy = dy;
+      movePreview.current?.setAttribute("transform", `translate(${dx} ${dy})`);
     }
   }
   function previewEditing() {
@@ -505,12 +554,18 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     if (active?.kind === "erase" || active?.kind === "move") updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === active.pageId ? { ...item, marks: active.after } : item) }));
   }
   function onPointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    lastInput.current = performance.now();
     if (navigation.end(event)) return;
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId || !page) return;
     event.preventDefault();
     if (active.kind === "draw" && event.type !== "pointercancel" && event.type !== "lostpointercapture") appendSamples(event, active);
     if (editFrame.current !== null) { cancelAnimationFrame(editFrame.current); editFrame.current = null; }
+    if (active.kind === "move") {
+      const ids = new Set(selected);
+      active.after = active.dx || active.dy ? active.before.map(mark => ids.has(mark.id) ? movedMark(mark, active.dx, active.dy) : mark) : active.before;
+      movePreview.current?.removeAttribute("transform");
+    }
     if (active.kind === "erase" && event.type === "pointerup") { const point = eventPoint(event); active.after = eraseMarks(active.after, active.previous, point, active.radius, active.mode, uid); }
     gesture.current = null;
     if (active.kind === "draw") {
@@ -541,7 +596,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       }
     } else if (active.kind === "move" || active.kind === "erase") {
       updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === active.pageId ? { ...item, marks: active.after } : item) }));
-      if (active.before !== active.after && JSON.stringify(active.before) !== JSON.stringify(active.after)) { undoStack.current.push({ kind: "marks", pageId: active.pageId, before: active.before, after: active.after }); redoStack.current = []; }
+      if (active.before !== active.after) { undoStack.current.push({ kind: "marks", pageId: active.pageId, before: active.before, after: active.after }); redoStack.current = []; }
     }
   }
   async function sendMessage() {
@@ -595,7 +650,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       <section className="reader-area">{doc && page ? <>
         <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="AI 询问画笔" active={tool === "ask"} disabled={busy} onClick={() => { setTool("ask"); setSelected([]); if (window.innerWidth > 900) setChatOpen(true); else setChatOpen(false); }}><AiPenIcon /></ToolButton></div>{tool === "eraser" && <div className="eraser-options"><button aria-label="整笔擦除" className={eraserMode === "stroke" ? "selected" : ""} onClick={() => setEraserMode("stroke")}>整笔</button><button aria-label="局部擦除" className={eraserMode === "area" ? "selected" : ""} onClick={() => setEraserMode("area")}>局部</button><input aria-label="擦除大小" type="range" min="6" max="40" step="2" value={eraserSize} onChange={event => setEraserSize(Number(event.target.value))} /></div>}<span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" disabled={tool === "ask" && (busy || !aiMarks.length)} onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" disabled={tool === "ask" && (busy || !aiRedoMarks.length)} onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="删除当前页" disabled={busy} onClick={deleteCurrentPage}><FileMinus2 size={18} /></ToolButton>{selected.length > 0 && <ToolButton label="删除选中对象" onClick={() => { setMarks(page.id, page.marks.filter(mark => !selected.includes(mark.id))); setSelected([]); }}><Trash2 size={18} /></ToolButton>}<ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
         <div className="reader-hint"><i /><span className="reader-hint-text">{tool === "ask" ? "划线、画圈均可连续标记；需移动页面请先选手掌工具" : tool === "lasso" ? "圈住笔迹或图片后拖动；移动页面请选手掌工具" : tool === "pan" ? "拖动后惯性滑动；双指捏合缩放，松手后恢复高清" : tool === "eraser" ? eraserMode === "stroke" ? "点中或划过笔画，整笔擦除" : "按住拖动，只擦掉碰到的笔迹；可调橡皮大小" : "Apple Pencil 书写时页面锁定；移动页面请选手掌工具"}</span>{aiMarks.length > 0 && <button className="ai-question-ready" onClick={() => setChatOpen(true)}>{aiMarks.length} 处标记 · 输入提示词</button>}</div>
-        <div ref={workspace} className={`workspace ${tool === "pan" ? "navigation-mode" : "writing-mode"}`} onScroll={scheduleVisiblePdf}><div className="paper" style={{ width: page.width * scale, height: page.height * scale }}><canvas ref={canvas} className="pdf-canvas" /><canvas ref={baseCanvas} className="pdf-preview" aria-hidden="true" /><svg className="ink-layer" width={page.width * scale} height={page.height * scale} viewBox={`0 0 ${page.width} ${page.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp} onContextMenu={event => event.preventDefault()}>{page.marks.map(mark => mark.type === "stroke" ? <path key={mark.id} d={pathFromPoints(mark.points)} fill="none" stroke={mark.color} strokeWidth={mark.width} strokeLinecap="round" strokeLinejoin="round" opacity={mark.tool === "highlighter" ? 0.38 : 1} /> : <image key={mark.id} href={mark.src} x={mark.x} y={mark.y} width={mark.width} height={mark.height} preserveAspectRatio="none" />)}{aiMarks.filter(mark => mark.pageId === page.id).flatMap(mark => (mark.selection?.boxes || []).map((box, index) => <rect key={`${mark.id}-${index}`} className="ai-text-target" x={box.x} y={box.y} width={box.width} height={box.height} fill="rgba(67,110,213,.08)" stroke="rgba(67,110,213,.35)" strokeWidth={0.5} pointerEvents="none" />))}{aiMarks.filter(mark => mark.pageId === page.id).map(mark => <path key={mark.id} className="ai-question-mark" d={pathFromPoints(mark.points)} fill="none" stroke="#436ed5" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}{selectionBounds && <rect x={selectionBounds.x - 8} y={selectionBounds.y - 8} width={selectionBounds.width + 16} height={selectionBounds.height + 16} rx="5" fill="none" stroke="#537abc" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" />}<path ref={previewPath} className="live-ink" d="" fill="none" strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" /></svg></div></div>
+        <div ref={workspace} className={`workspace ${tool === "pan" ? "navigation-mode" : "writing-mode"}`} onScroll={scheduleVisiblePdf}><div className="paper" style={{ width: page.width * scale, height: page.height * scale }}><canvas ref={canvas} className="pdf-canvas" /><canvas ref={baseCanvas} className="pdf-preview" aria-hidden="true" /><canvas ref={liveInk} className="live-ink-canvas" aria-hidden="true" /><svg className="ink-layer" width={page.width * scale} height={page.height * scale} viewBox={`0 0 ${page.width} ${page.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp} onContextMenu={event => event.preventDefault()}><InkMarks marks={markGroups.normal} /><g ref={movePreview} className="selected-ink"><InkMarks marks={markGroups.selected} />{selectionBounds && <rect x={selectionBounds.x - 8} y={selectionBounds.y - 8} width={selectionBounds.width + 16} height={selectionBounds.height + 16} rx="5" fill="none" stroke="#537abc" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" />}</g>{aiMarks.filter(mark => mark.pageId === page.id).flatMap(mark => (mark.selection?.boxes || []).map((box, index) => <rect key={`${mark.id}-${index}`} className="ai-text-target" x={box.x} y={box.y} width={box.width} height={box.height} fill="rgba(67,110,213,.08)" stroke="rgba(67,110,213,.35)" strokeWidth={0.5} pointerEvents="none" />))}{aiMarks.filter(mark => mark.pageId === page.id).map(mark => <path key={mark.id} className="ai-question-mark" d={pathFromPoints(mark.points)} fill="none" stroke="#436ed5" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}<path ref={previewPath} className="live-ink" d="" fill="none" strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" /></svg></div></div>
         <footer className="page-footer"><div className="page-navigation"><button aria-label="上一页" disabled={doc.currentPage === 0} onClick={() => changePage(doc.currentPage - 1)}><ChevronLeft size={19} /></button><span><strong>{doc.currentPage + 1}</strong> / {doc.pages.length}</span><button aria-label="下一页" disabled={doc.currentPage === doc.pages.length - 1} onClick={() => changePage(doc.currentPage + 1)}><ChevronRight size={19} /></button></div><div className="zoom-controls"><button aria-label="缩小" onClick={() => navigation.zoomBy(-0.15)}><Minus size={17} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => navigation.zoomBy(0.15)}><Plus size={17} /></button></div></footer>
       </> : <div className="welcome"><div className="welcome-art"><div className="art-page back" /><div className="art-page front"><div className="art-lines"><i /><i /><i /><i /></div><span>∿</span></div><b>✦</b></div><span className="eyebrow">YOUR READING DESK</span><h1>让思考留在文献旁边。</h1><p>导入 PDF，用 Apple Pencil 写下想法，标记看不懂的内容，写下提示词后向 AI 提问。</p><button className="welcome-import" onClick={() => pdfInput.current?.click()}><Plus size={19} />导入第一篇文献</button><div className="welcome-steps"><span><PenLine size={16} />自由批注</span><span><Lasso size={16} />套索整理</span><span><Paintbrush size={16} />画笔问 AI</span></div></div>}</section>
       {chatOpen && <aside className="chat-panel"><div className="chat-heading"><div className="chat-heading-icon"><Sparkles size={20} /></div><div><span className="eyebrow">READING COMPANION</span><h2>AI 助读</h2></div><button className="plain-icon compact chat-close" aria-label="关闭 AI 助读" onClick={() => setChatOpen(false)}><X size={19} /></button></div><div className="paper-context-status"><span>{paperStatus}</span><small>{aiLabel} · 提问时参考全文</small></div><div ref={chatMessages} className="chat-messages">{doc?.chat.length ? doc.chat.map(item => <div className={`chat-message ${item.role}`} key={item.id}>{item.role === "assistant" && <span className="assistant-avatar">✦</span>}<div className="message-body">{item.quotedText && <div className="message-quote">“{item.quotedText.slice(0, 230)}{item.quotedText.length > 230 ? "…" : ""}”</div>}{item.images?.length ? <div className="message-images">{item.images.map((src, index) => <img key={index} src={src} alt={`本次提问的标记内容 ${index + 1}`} loading="lazy" />)}</div> : null}<p>{item.content}</p></div></div>) : <div className="chat-empty"><span>✦</span><h3>读到哪里，问到哪里</h3><p>用 <strong>AI 询问画笔</strong> 划线或画圈，输入提示词后一起发送。也可以直接打字提问。</p><button onClick={() => setPrompt("请先通读整篇文献，概括研究问题、方法、贡献、实验结论和局限，并标注原始 PDF 页码。")}>生成全文导读 <ChevronRight size={15} /></button><button onClick={() => setPrompt("请帮我梳理这页的主要论证。")}>梳理主要论证 <ChevronRight size={15} /></button></div>}{busy && <div className="typing-indicator"><i /><i /><i /></div>}</div><div className="chat-composer">{aiMarks.length > 0 && <div className="ai-mark-summary"><div><Paintbrush size={17} /><strong>已标记 {aiMarks.length} 处</strong><span>第 {aiPageNumbers.join("、")} 页</span></div><p>已定位的原文可核对、修正，再与提示词一起发送。</p><div className="ai-excerpt-list">{aiMarks.map((mark, index) => <label className="ai-excerpt" key={mark.id}><span>标记 {index + 1} · 第 {doc ? doc.pages.findIndex(item => item.id === mark.pageId) + 1 : 1} 页{!mark.selection ? " · 正在定位…" : mark.selection.boxes.length ? " · 已定位" : " · 截图识别"}</span><textarea aria-label={`标记 ${index + 1} 的原文`} rows={2} value={mark.textOverride ?? mark.selection?.text ?? ""} disabled={busy || !mark.selection} onChange={event => setAiMarks(marks => marks.map(item => item.id === mark.id ? { ...item, textOverride: event.target.value } : item))} placeholder="此处将使用高清截图；也可补充原文" /></label>)}</div><div className="ai-mark-actions"><button aria-label="撤回上一笔 AI 标记" disabled={busy} onClick={undoAiMark}><Undo2 size={13} />撤回上一笔</button><button aria-label="清空 AI 标记" disabled={busy} onClick={clearAiMarks}><X size={13} />清空标记</button></div></div>}<div className="composer-box"><textarea aria-label="向 AI 提问" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={doc ? aiMarks.length ? "输入提示词：想怎样解读这些标记？" : "输入问题，或先用 AI 画笔标记…" : "先导入一份 PDF 文献"} disabled={!doc || busy} rows={3} /><div><span>Enter 发送 · Shift + Enter 换行</span><button aria-label="发送消息" disabled={!doc || busy || !prompt.trim()} onClick={() => void sendMessage()}><Send size={17} /></button></div></div></div></aside>}

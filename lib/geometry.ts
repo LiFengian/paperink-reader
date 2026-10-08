@@ -4,6 +4,16 @@ export const clamp = (n: number, min: number, max: number) => Math.min(max, Math
 export const pathFromPoints = (points: Point[], close = false) =>
   points.length ? `M ${points.map(p => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" L ")}${close ? " Z" : ""}` : "";
 
+const boundsCache = new WeakMap<Mark, { left: number; right: number; top: number; bottom: number }>();
+const polygonBoundsCache = new WeakMap<Point[], { left: number; right: number; top: number; bottom: number }>();
+export function individualBounds(mark: Mark) {
+  const existing = boundsCache.get(mark); if (existing) return existing;
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  if (mark.type === "image") { left = mark.x; right = mark.x + mark.width; top = mark.y; bottom = mark.y + mark.height; }
+  else for (const point of mark.points) { left = Math.min(left, point.x); right = Math.max(right, point.x); top = Math.min(top, point.y); bottom = Math.max(bottom, point.y); }
+  const bounds = { left, right, top, bottom }; boundsCache.set(mark, bounds); return bounds;
+}
+
 export function pointInPolygon(point: Point, polygon: Point[]) {
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -14,18 +24,24 @@ export function pointInPolygon(point: Point, polygon: Point[]) {
 }
 
 export function markInPolygon(mark: Mark, polygon: Point[]) {
+  const bounds = individualBounds(mark);
+  let area = polygonBoundsCache.get(polygon);
+  if (!area) {
+    area = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+    for (const point of polygon) { area.left = Math.min(area.left, point.x); area.right = Math.max(area.right, point.x); area.top = Math.min(area.top, point.y); area.bottom = Math.max(area.bottom, point.y); }
+    polygonBoundsCache.set(polygon, area);
+  }
+  if (bounds.right < area.left || bounds.left > area.right || bounds.bottom < area.top || bounds.top > area.bottom) return false;
   return mark.type === "stroke"
     ? mark.points.some(point => pointInPolygon(point, polygon))
     : pointInPolygon({ x: mark.x + mark.width / 2, y: mark.y + mark.height / 2 }, polygon);
 }
 
 export function markBounds(marks: Mark[]) {
-  const points = marks.flatMap(mark => mark.type === "stroke" ? mark.points : [
-    { x: mark.x, y: mark.y }, { x: mark.x + mark.width, y: mark.y + mark.height },
-  ]);
-  if (!points.length) return null;
-  const xs = points.map(p => p.x), ys = points.map(p => p.y);
-  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+  if (!marks.length) return null;
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  for (const mark of marks) { const bounds = individualBounds(mark); left = Math.min(left, bounds.left); right = Math.max(right, bounds.right); top = Math.min(top, bounds.top); bottom = Math.max(bottom, bounds.bottom); }
+  return Number.isFinite(left) ? { x: left, y: top, width: right - left, height: bottom - top } : null;
 }
 
 export function movedMark(mark: Mark, dx: number, dy: number): Mark {

@@ -1,4 +1,5 @@
 import type { Mark, Point, Stroke } from "./reader-types";
+import { individualBounds } from "./geometry.ts";
 
 export type EraserMode = "stroke" | "area";
 const point = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
@@ -62,6 +63,8 @@ export function eraseMarks(marks: Mark[], from: Point, to: Point, radius: number
   let changed = false;
   const next = marks.flatMap<Mark>(mark => {
     if (mark.type !== "stroke") return [mark];
+    const bounds = individualBounds(mark), reach = radius + mark.width / 2;
+    if (bounds.right < Math.min(from.x, to.x) - reach || bounds.left > Math.max(from.x, to.x) + reach || bounds.bottom < Math.min(from.y, to.y) - reach || bounds.top > Math.max(from.y, to.y) + reach) return [mark];
     const pieces = cutStroke(mark, from, to, radius, id);
     if (pieces.length === 1 && pieces[0] === mark) return [mark];
     changed = true;
