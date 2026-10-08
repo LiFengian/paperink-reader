@@ -9,6 +9,10 @@ const hash = async (blob: Blob) => Array.from(new Uint8Array(await crypto.subtle
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const image = (value: unknown): value is string => typeof value === "string" && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value);
+const stroke = (value: unknown): boolean => record(value) && value.type === "stroke" && typeof value.id === "string" && !!value.id
+  && finite(value.width) && value.width > 0 && typeof value.color === "string" && /^#[0-9a-f]{6}$/i.test(value.color)
+  && ["pen", "highlighter"].includes(String(value.tool)) && Array.isArray(value.points) && !!value.points.length
+  && value.points.every(point => record(point) && finite(point.x) && finite(point.y));
 
 export function validateBackupDocument(value: unknown): asserts value is ReaderDocument {
   const fail = () => { throw new Error("备份中的文献数据不完整或格式不受支持。"); };
@@ -25,11 +29,15 @@ export function validateBackupDocument(value: unknown): asserts value is ReaderD
       if (!record(mark) || typeof mark.id !== "string" || !mark.id || marks.has(mark.id)) return fail();
       marks.add(mark.id);
       if (mark.type === "stroke") {
-        if (!finite(mark.width) || mark.width <= 0 || typeof mark.color !== "string" || !/^#[0-9a-f]{6}$/i.test(mark.color)
-          || !["pen", "highlighter"].includes(String(mark.tool)) || !Array.isArray(mark.points) || !mark.points.length
-          || mark.points.some(point => !record(point) || !finite(point.x) || !finite(point.y))) return fail();
+        if (!stroke(mark)) return fail();
       } else if (mark.type === "image") {
         if (!image(mark.src) || !finite(mark.x) || !finite(mark.y) || !finite(mark.width) || mark.width <= 0 || !finite(mark.height) || mark.height <= 0) return fail();
+      } else if (mark.type === "note") {
+        if (!finite(mark.x) || !finite(mark.y) || !finite(mark.width) || mark.width <= 0 || !finite(mark.height) || mark.height <= 0
+          || typeof mark.text !== "string" || !finite(mark.noteWidth) || mark.noteWidth <= 0 || mark.noteWidth > 4096
+          || !finite(mark.noteHeight) || mark.noteHeight <= 0 || mark.noteHeight > 4096
+          || !Array.isArray(mark.strokes) || mark.strokes.some(item => !stroke(item))
+          || new Set(mark.strokes.map(item => item.id)).size !== mark.strokes.length) return fail();
       } else return fail();
     }
   }

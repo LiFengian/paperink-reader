@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FileMinus2, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, Paintbrush, PenLine, Plus, Redo2, Send, Sparkles, Trash2, Undo2, X } from "lucide-react";
+import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FileMinus2, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, Paintbrush, PenLine, Plus, Redo2, Send, Sparkles, StickyNote, Trash2, Undo2, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useReaderNavigation } from "../components/use-reader-navigation";
@@ -11,6 +11,8 @@ import type { EraserMode } from "../lib/eraser";
 import { readWholePaper, paperReference } from "../lib/paper-context";
 import { getAiSettings } from "../lib/ai-client";
 import { InkMarks } from "../components/ink-marks";
+import { StickyNoteEditor } from "../components/sticky-note-editor";
+import { createStickyNote } from "../lib/sticky-notes";
 import { PersonalControls } from "../components/personal-controls";
 import { askAi } from "../lib/ai-client";
 import { pdfRaster } from "../lib/pdf-raster";
@@ -19,9 +21,10 @@ import { createAiContext } from "../lib/ai-context";
 import { aiStrokeKind, identifyAiMark } from "../lib/ai-selection";
 import { deleteDocument, getPdf, listDocuments, saveDocument, savePdf } from "../lib/local-store";
 import { clamp, markBounds, markInPolygon, movedMark, pathFromPoints } from "../lib/geometry";
-import type { AiMark, AiSelection, ChatMessage, Mark, Point, ReaderDocument, ReaderPage, Stroke, ToolName } from "../lib/reader-types";
+import type { AiMark, AiSelection, ChatMessage, Mark, NoteMark, Point, ReaderDocument, ReaderPage, Stroke, ToolName } from "../lib/reader-types";
 
 type Gesture =
+  | { kind: "note"; pointer: number; markId?: string; point: Point; x: number; y: number }
   | { kind: "draw"; pointer: number; points: Point[]; pageId: string; tool: ToolName; color: string; width: number; left: number; top: number; scale: number; pageWidth: number; pageHeight: number }
   | { kind: "move"; pointer: number; start: Point; before: Mark[]; after: Mark[]; pageId: string; dx: number; dy: number }
   | { kind: "erase"; pointer: number; pageId: string; before: Mark[]; after: Mark[]; previous: Point; radius: number; mode: EraserMode };
@@ -119,6 +122,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [activeNote, setActiveNote] = useState<{ documentId: string; pageId: string; markId: string; before: Mark[] } | null>(null);
   const previewPath = useRef<SVGPathElement>(null);
   const liveInk = useRef<HTMLCanvasElement>(null);
   const liveIndex = useRef(0);
@@ -145,6 +149,8 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const undoStack = useRef<History[]>([]);
   const redoStack = useRef<History[]>([]);
   const page = doc?.pages[doc.currentPage] || null;
+  const openedNote = activeNote && doc?.id === activeNote.documentId && page?.id === activeNote.pageId
+    ? page.marks.find((mark): mark is NoteMark => mark.type === "note" && mark.id === activeNote.markId) : undefined;
   const fit = page ? Math.min((viewSize.width - 48) / page.width, 3) : 1;
   const scale = Math.max(0.25, fit * zoom);
   const markGroups = useMemo(() => {
@@ -248,7 +254,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     let cancelled = false;
     let task: { destroy: () => Promise<void> } | null = null;
     undoStack.current = []; redoStack.current = [];
-    setAiMarks([]); setAiRedoMarks([]); setPrompt("");
+    setAiMarks([]); setAiRedoMarks([]); setPrompt(""); setActiveNote(null);
     setPdf(null);
     if (doc) (async () => {
       const blob = await getPdf(doc.id);
@@ -268,6 +274,13 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     };
     setAiMarks(keepExistingPages); setAiRedoMarks(keepExistingPages);
   }, [doc?.pages]);
+  useEffect(() => {
+    if (!pdf || !doc) return;
+    for (const mark of [...aiMarks, ...aiRedoMarks].filter(item => !item.selection)) {
+      const sourcePage = doc.pages.find(item => item.id === mark.pageId);
+      if (sourcePage) resolveAiSelection(mark, sourcePage, pdf);
+    }
+  }, [pdf]);
   useEffect(() => {
     if (!page || !canvas.current) return;
     let cancelled = false;
@@ -356,6 +369,13 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     setAiMarks([...aiMarks, last]); setAiRedoMarks(aiRedoMarks.slice(0, -1));
   }
   function clearAiMarks() { if (!busy) { setAiMarks([]); setAiRedoMarks([]); } }
+  function resolveAiSelection(mark: AiMark, sourcePage: ReaderPage, openedPdf: PDFDocumentProxy | null) {
+    const resolve = (selection: AiSelection) => {
+      const update = (marks: AiMark[]) => marks.map(item => item.id === mark.id ? { ...item, selection } : item);
+      setAiMarks(update); setAiRedoMarks(update);
+    };
+    void identifyAiMark(openedPdf, sourcePage, mark.points).then(resolve).catch(() => resolve({ kind: aiStrokeKind(mark.points), text: "", boxes: [] }));
+  }
   const undo = () => { if (tool === "ask") { undoAiMark(); return; } const entry = undoStack.current.pop(); if (entry) { redoStack.current.push(entry); applyHistory(entry, "before"); } };
   const redo = () => { if (tool === "ask") { redoAiMark(); return; } const entry = redoStack.current.pop(); if (entry) { undoStack.current.push(entry); applyHistory(entry, "after"); } };
 
@@ -386,7 +406,31 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   function changePage(index: number) {
     if (!doc) return;
     updateDoc(current => ({ ...current, currentPage: clamp(index, 0, current.pages.length - 1) }));
-    setSelected([]); setZoom(1); workspace.current?.scrollTo(0, 0);
+    setSelected([]); setActiveNote(null); setZoom(1); workspace.current?.scrollTo(0, 0);
+  }
+  function openNote(markId: string) {
+    if (!doc || !page) return;
+    setSelected([]); setActiveNote({ documentId: doc.id, pageId: page.id, markId, before: page.marks });
+  }
+  function updateNote(change: Partial<Pick<NoteMark, "text" | "strokes">>) {
+    if (!activeNote) return;
+    lastInput.current = performance.now();
+    updateDoc(current => current.id !== activeNote.documentId ? current : {
+      ...current, pages: current.pages.map(item => item.id !== activeNote.pageId ? item : {
+        ...item, marks: item.marks.map(mark => mark.type === "note" && mark.id === activeNote.markId ? { ...mark, ...change } : mark),
+      }),
+    });
+  }
+  function closeNote() {
+    const after = activeNote && doc && doc.id === activeNote.documentId ? doc.pages.find(item => item.id === activeNote.pageId)?.marks : undefined;
+    if (activeNote && after && after !== activeNote.before) {
+      undoStack.current.push({ kind: "marks", pageId: activeNote.pageId, before: activeNote.before, after }); redoStack.current = [];
+    }
+    setActiveNote(null);
+  }
+  function deleteNote() {
+    if (!openedNote || !page) return;
+    closeNote(); setMarks(page.id, page.marks.filter(mark => mark.id !== openedNote.id)); setSelected([]); setMessage("便签已删除，可点击撤销恢复。");
   }
   function addBlankPage() {
     if (!doc || !page) return;
@@ -505,6 +549,16 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   function onPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
     lastInput.current = performance.now();
     if (!page || !workspace.current || (tool === "ask" && busy)) return;
+    if (gesture.current) { event.preventDefault(); return; }
+    const marker = (event.target as Element).closest("[data-note-id]");
+    const markId = tool !== "lasso" && tool !== "eraser" && (event.pointerType !== "touch" || event.isPrimary)
+      ? marker?.getAttribute("data-note-id") || undefined : undefined;
+    if ((markId || tool === "note") && (event.pointerType !== "mouse" || event.button === 0)) {
+      event.preventDefault();
+      gesture.current = { kind: "note", pointer: event.pointerId, markId, point: eventPoint(event), x: event.clientX, y: event.clientY };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Pointer already released. */ }
+      return;
+    }
     if (navigation.start(event)) return;
     event.preventDefault();
     // A palm or second pointer must never replace the active Pencil gesture.
@@ -535,6 +589,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     if (navigation.move(event)) return;
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId || !page || !workspace.current) return;
+    if (active.kind === "note") { event.preventDefault(); return; }
     if (active.kind === "erase") {
       const point = eventPoint(event); active.after = eraseMarks(active.after, active.previous, point, active.radius, active.mode, uid); active.previous = point;
       if (editFrame.current === null) editFrame.current = requestAnimationFrame(previewEditing);
@@ -559,6 +614,17 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId || !page) return;
     event.preventDefault();
+    if (active.kind === "note") {
+      gesture.current = null;
+      if (event.type !== "pointerup" || Math.hypot(event.clientX - active.x, event.clientY - active.y) > 12 || !doc) return;
+      if (active.markId) openNote(active.markId);
+      else {
+        const note = createStickyNote(page, active.point), marks = [...page.marks, note];
+        setMarks(page.id, marks); setSelected([]);
+        setActiveNote({ documentId: doc.id, pageId: page.id, markId: note.id, before: marks });
+      }
+      return;
+    }
     if (active.kind === "draw" && event.type !== "pointercancel" && event.type !== "lostpointercapture") appendSamples(event, active);
     if (editFrame.current !== null) { cancelAnimationFrame(editFrame.current); editFrame.current = null; }
     if (active.kind === "move") {
@@ -586,13 +652,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
         setAiMarks(marks => [...marks, mark]);
         setAiRedoMarks([]); setMessage(""); if (window.innerWidth > 900) setChatOpen(true);
         const sourcePage = doc?.pages.find(item => item.id === active.pageId);
-        if (sourcePage) {
-          const resolve = (selection: AiSelection) => {
-            const update = (marks: AiMark[]) => marks.map(item => item.id === mark.id ? { ...item, selection } : item);
-            setAiMarks(update); setAiRedoMarks(update);
-          };
-          void identifyAiMark(pdf, sourcePage, points).then(resolve).catch(() => resolve({ kind: aiStrokeKind(points), text: "", boxes: [] }));
-        }
+        if (sourcePage && (pdf || sourcePage.sourcePage === null)) resolveAiSelection(mark, sourcePage, pdf);
       }
     } else if (active.kind === "move" || active.kind === "erase") {
       updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === active.pageId ? { ...item, marks: active.after } : item) }));
@@ -648,14 +708,15 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     <div className="app-body">
       {libraryOpen && <aside className="library-panel"><div className="panel-heading"><div><span className="eyebrow">LIBRARY</span><h2>文献库</h2></div><button className="plain-icon compact" aria-label="关闭文献库" onClick={() => setLibraryOpen(false)}><X size={18} /></button></div><button className="import-button" disabled={busy} onClick={() => pdfInput.current?.click()}><Plus size={18} />导入 PDF 文献</button><div className="library-caption">最近阅读 <span>{library.length}</span></div><div className="library-list">{library.length ? library.map(item => <div className={`library-item ${doc?.id === item.id ? "selected" : ""}`} key={item.id}><button className="library-open" disabled={busy} onClick={() => { setDoc(item); setSelected([]); setLibraryOpen(false); }}><span className="book-thumb"><BookOpen size={22} /></span><span className="book-info"><strong>{item.name}</strong><small>{item.pages.length} 页 · {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small></span></button><button className="delete-small" title="删除文献" aria-label={`删除 ${item.name}`} onClick={() => void removeDoc(item.id)}><Trash2 size={15} /></button></div>) : <div className="library-empty"><FolderOpen size={28} /><p>还没有文献</p><small>导入 PDF 后，笔记会自动保存在这台设备。</small></div>}</div><div className="library-footer"><span>◈</span><p>文献和笔记仅存于本机。点击发送后，标记附近的截图和提示词会一并发送给 DeepSeek。</p></div></aside>}
       <section className="reader-area">{doc && page ? <>
-        <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="AI 询问画笔" active={tool === "ask"} disabled={busy} onClick={() => { setTool("ask"); setSelected([]); if (window.innerWidth > 900) setChatOpen(true); else setChatOpen(false); }}><AiPenIcon /></ToolButton></div>{tool === "eraser" && <div className="eraser-options"><button aria-label="整笔擦除" className={eraserMode === "stroke" ? "selected" : ""} onClick={() => setEraserMode("stroke")}>整笔</button><button aria-label="局部擦除" className={eraserMode === "area" ? "selected" : ""} onClick={() => setEraserMode("area")}>局部</button><input aria-label="擦除大小" type="range" min="6" max="40" step="2" value={eraserSize} onChange={event => setEraserSize(Number(event.target.value))} /></div>}<span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" disabled={tool === "ask" && (busy || !aiMarks.length)} onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" disabled={tool === "ask" && (busy || !aiRedoMarks.length)} onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="删除当前页" disabled={busy} onClick={deleteCurrentPage}><FileMinus2 size={18} /></ToolButton>{selected.length > 0 && <ToolButton label="删除选中对象" onClick={() => { setMarks(page.id, page.marks.filter(mark => !selected.includes(mark.id))); setSelected([]); }}><Trash2 size={18} /></ToolButton>}<ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
-        <div className="reader-hint"><i /><span className="reader-hint-text">{tool === "ask" ? "划线、画圈均可连续标记；需移动页面请先选手掌工具" : tool === "lasso" ? "圈住笔迹或图片后拖动；移动页面请选手掌工具" : tool === "pan" ? "拖动后惯性滑动；双指捏合缩放，松手后恢复高清" : tool === "eraser" ? eraserMode === "stroke" ? "点中或划过笔画，整笔擦除" : "按住拖动，只擦掉碰到的笔迹；可调橡皮大小" : "Apple Pencil 书写时页面锁定；移动页面请选手掌工具"}</span>{aiMarks.length > 0 && <button className="ai-question-ready" onClick={() => setChatOpen(true)}>{aiMarks.length} 处标记 · 输入提示词</button>}</div>
-        <div ref={workspace} className={`workspace ${tool === "pan" ? "navigation-mode" : "writing-mode"}`} onScroll={scheduleVisiblePdf}><div className="paper" style={{ width: page.width * scale, height: page.height * scale }}><canvas ref={canvas} className="pdf-canvas" /><canvas ref={baseCanvas} className="pdf-preview" aria-hidden="true" /><canvas ref={liveInk} className="live-ink-canvas" aria-hidden="true" /><svg className="ink-layer" width={page.width * scale} height={page.height * scale} viewBox={`0 0 ${page.width} ${page.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp} onContextMenu={event => event.preventDefault()}><InkMarks marks={markGroups.normal} /><g ref={movePreview} className="selected-ink"><InkMarks marks={markGroups.selected} />{selectionBounds && <rect x={selectionBounds.x - 8} y={selectionBounds.y - 8} width={selectionBounds.width + 16} height={selectionBounds.height + 16} rx="5" fill="none" stroke="#537abc" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" />}</g>{aiMarks.filter(mark => mark.pageId === page.id).flatMap(mark => (mark.selection?.boxes || []).map((box, index) => <rect key={`${mark.id}-${index}`} className="ai-text-target" x={box.x} y={box.y} width={box.width} height={box.height} fill="rgba(67,110,213,.08)" stroke="rgba(67,110,213,.35)" strokeWidth={0.5} pointerEvents="none" />))}{aiMarks.filter(mark => mark.pageId === page.id).map(mark => <path key={mark.id} className="ai-question-mark" d={pathFromPoints(mark.points)} fill="none" stroke="#436ed5" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}<path ref={previewPath} className="live-ink" d="" fill="none" strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" /></svg></div></div>
+        <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="插入便签" active={tool === "note"} onClick={() => { setTool("note"); setSelected([]); }}><StickyNote size={19} /></ToolButton><ToolButton label="AI 询问画笔" active={tool === "ask"} disabled={busy} onClick={() => { setTool("ask"); setSelected([]); if (window.innerWidth > 900) setChatOpen(true); else setChatOpen(false); }}><AiPenIcon /></ToolButton></div>{tool === "eraser" && <div className="eraser-options"><button aria-label="整笔擦除" className={eraserMode === "stroke" ? "selected" : ""} onClick={() => setEraserMode("stroke")}>整笔</button><button aria-label="局部擦除" className={eraserMode === "area" ? "selected" : ""} onClick={() => setEraserMode("area")}>局部</button><input aria-label="擦除大小" type="range" min="6" max="40" step="2" value={eraserSize} onChange={event => setEraserSize(Number(event.target.value))} /></div>}<span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" disabled={tool === "ask" && (busy || !aiMarks.length)} onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" disabled={tool === "ask" && (busy || !aiRedoMarks.length)} onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="删除当前页" disabled={busy} onClick={deleteCurrentPage}><FileMinus2 size={18} /></ToolButton>{selected.length > 0 && <ToolButton label="删除选中对象" onClick={() => { setMarks(page.id, page.marks.filter(mark => !selected.includes(mark.id))); setSelected([]); }}><Trash2 size={18} /></ToolButton>}<ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
+        <div className="reader-hint"><i /><span className="reader-hint-text">{tool === "note" ? "点击页面放置便签标记；点标记可写笔记，收起后再次点击查看" : tool === "ask" ? "划线、画圈均可连续标记；需移动页面请先选手掌工具" : tool === "lasso" ? "圈住笔迹、图片或便签标记后拖动；移动页面请选手掌工具" : tool === "pan" ? "拖动后惯性滑动；双指捏合缩放，松手后恢复高清" : tool === "eraser" ? eraserMode === "stroke" ? "点中或划过笔画，整笔擦除" : "按住拖动，只擦掉碰到的笔迹；可调橡皮大小" : "Apple Pencil 书写时页面锁定；移动页面请选手掌工具"}</span>{aiMarks.length > 0 && <button className="ai-question-ready" onClick={() => setChatOpen(true)}>{aiMarks.length} 处标记 · 输入提示词</button>}</div>
+        <div ref={workspace} className={`workspace ${tool === "pan" ? "navigation-mode" : "writing-mode"}`} onScroll={scheduleVisiblePdf}><div className="paper" style={{ width: page.width * scale, height: page.height * scale }}><canvas ref={canvas} className="pdf-canvas" /><canvas ref={baseCanvas} className="pdf-preview" aria-hidden="true" /><canvas ref={liveInk} className="live-ink-canvas" aria-hidden="true" /><svg className="ink-layer" width={page.width * scale} height={page.height * scale} viewBox={`0 0 ${page.width} ${page.height}`} onKeyDown={event => { const id = (event.target as Element).closest("[data-note-id]")?.getAttribute("data-note-id"); if (id && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openNote(id); } }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp} onContextMenu={event => event.preventDefault()}><InkMarks marks={markGroups.normal} /><g ref={movePreview} className="selected-ink"><InkMarks marks={markGroups.selected} />{selectionBounds && <rect x={selectionBounds.x - 8} y={selectionBounds.y - 8} width={selectionBounds.width + 16} height={selectionBounds.height + 16} rx="5" fill="none" stroke="#537abc" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" />}</g>{aiMarks.filter(mark => mark.pageId === page.id).flatMap(mark => (mark.selection?.boxes || []).map((box, index) => <rect key={`${mark.id}-${index}`} className="ai-text-target" x={box.x} y={box.y} width={box.width} height={box.height} fill="rgba(67,110,213,.08)" stroke="rgba(67,110,213,.35)" strokeWidth={0.5} pointerEvents="none" />))}{aiMarks.filter(mark => mark.pageId === page.id).map(mark => <path key={mark.id} className="ai-question-mark" d={pathFromPoints(mark.points)} fill="none" stroke="#436ed5" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}<path ref={previewPath} className="live-ink" d="" fill="none" strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" /></svg></div></div>
         <footer className="page-footer"><div className="page-navigation"><button aria-label="上一页" disabled={doc.currentPage === 0} onClick={() => changePage(doc.currentPage - 1)}><ChevronLeft size={19} /></button><span><strong>{doc.currentPage + 1}</strong> / {doc.pages.length}</span><button aria-label="下一页" disabled={doc.currentPage === doc.pages.length - 1} onClick={() => changePage(doc.currentPage + 1)}><ChevronRight size={19} /></button></div><div className="zoom-controls"><button aria-label="缩小" onClick={() => navigation.zoomBy(-0.15)}><Minus size={17} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => navigation.zoomBy(0.15)}><Plus size={17} /></button></div></footer>
       </> : <div className="welcome"><div className="welcome-art"><div className="art-page back" /><div className="art-page front"><div className="art-lines"><i /><i /><i /><i /></div><span>∿</span></div><b>✦</b></div><span className="eyebrow">YOUR READING DESK</span><h1>让思考留在文献旁边。</h1><p>导入 PDF，用 Apple Pencil 写下想法，标记看不懂的内容，写下提示词后向 AI 提问。</p><button className="welcome-import" onClick={() => pdfInput.current?.click()}><Plus size={19} />导入第一篇文献</button><div className="welcome-steps"><span><PenLine size={16} />自由批注</span><span><Lasso size={16} />套索整理</span><span><Paintbrush size={16} />画笔问 AI</span></div></div>}</section>
       {chatOpen && <aside className="chat-panel"><div className="chat-heading"><div className="chat-heading-icon"><Sparkles size={20} /></div><div><span className="eyebrow">READING COMPANION</span><h2>AI 助读</h2></div><button className="plain-icon compact chat-close" aria-label="关闭 AI 助读" onClick={() => setChatOpen(false)}><X size={19} /></button></div><div className="paper-context-status"><span>{paperStatus}</span><small>{aiLabel} · 提问时参考全文</small></div><div ref={chatMessages} className="chat-messages">{doc?.chat.length ? doc.chat.map(item => <div className={`chat-message ${item.role}`} key={item.id}>{item.role === "assistant" && <span className="assistant-avatar">✦</span>}<div className="message-body">{item.quotedText && <div className="message-quote">“{item.quotedText.slice(0, 230)}{item.quotedText.length > 230 ? "…" : ""}”</div>}{item.images?.length ? <div className="message-images">{item.images.map((src, index) => <img key={index} src={src} alt={`本次提问的标记内容 ${index + 1}`} loading="lazy" />)}</div> : null}<p>{item.content}</p></div></div>) : <div className="chat-empty"><span>✦</span><h3>读到哪里，问到哪里</h3><p>用 <strong>AI 询问画笔</strong> 划线或画圈，输入提示词后一起发送。也可以直接打字提问。</p><button onClick={() => setPrompt("请先通读整篇文献，概括研究问题、方法、贡献、实验结论和局限，并标注原始 PDF 页码。")}>生成全文导读 <ChevronRight size={15} /></button><button onClick={() => setPrompt("请帮我梳理这页的主要论证。")}>梳理主要论证 <ChevronRight size={15} /></button></div>}{busy && <div className="typing-indicator"><i /><i /><i /></div>}</div><div className="chat-composer">{aiMarks.length > 0 && <div className="ai-mark-summary"><div><Paintbrush size={17} /><strong>已标记 {aiMarks.length} 处</strong><span>第 {aiPageNumbers.join("、")} 页</span></div><p>已定位的原文可核对、修正，再与提示词一起发送。</p><div className="ai-excerpt-list">{aiMarks.map((mark, index) => <label className="ai-excerpt" key={mark.id}><span>标记 {index + 1} · 第 {doc ? doc.pages.findIndex(item => item.id === mark.pageId) + 1 : 1} 页{!mark.selection ? " · 正在定位…" : mark.selection.boxes.length ? " · 已定位" : " · 截图识别"}</span><textarea aria-label={`标记 ${index + 1} 的原文`} rows={2} value={mark.textOverride ?? mark.selection?.text ?? ""} disabled={busy || !mark.selection} onChange={event => setAiMarks(marks => marks.map(item => item.id === mark.id ? { ...item, textOverride: event.target.value } : item))} placeholder="此处将使用高清截图；也可补充原文" /></label>)}</div><div className="ai-mark-actions"><button aria-label="撤回上一笔 AI 标记" disabled={busy} onClick={undoAiMark}><Undo2 size={13} />撤回上一笔</button><button aria-label="清空 AI 标记" disabled={busy} onClick={clearAiMarks}><X size={13} />清空标记</button></div></div>}<div className="composer-box"><textarea aria-label="向 AI 提问" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={doc ? aiMarks.length ? "输入提示词：想怎样解读这些标记？" : "输入问题，或先用 AI 画笔标记…" : "先导入一份 PDF 文献"} disabled={!doc || busy} rows={3} /><div><span>Enter 发送 · Shift + Enter 换行</span><button aria-label="发送消息" disabled={!doc || busy || !prompt.trim()} onClick={() => void sendMessage()}><Send size={17} /></button></div></div></div></aside>}
     </div>
+    {openedNote && <StickyNoteEditor key={openedNote.id} note={openedNote} pageNumber={(doc?.currentPage || 0) + 1} onChange={updateNote} onClose={closeNote} onDelete={deleteNote} onActivity={() => { lastInput.current = performance.now(); }} />}
     {message && <div className="status-toast" role="status"><span>{message}</span><button aria-label="关闭提示" onClick={() => setMessage("")}><X size={14} /></button></div>}
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="关闭说明" onClick={() => setHelp(false)}><X size={20} /></button><span className="eyebrow">QUICK START</span><h2>在 iPad 上开始阅读</h2><p><strong>01 导入文献</strong> 若要添加到主屏幕，请先添加并从图标打开，再导入 PDF。已有文献可在“完整备份”中生成 .paperink 文件，在新入口恢复。</p><p><strong>02 手写与整理</strong> Apple Pencil 写画时页面锁定、忽略手掌。需移动页面时，先选手掌图标，再拖动或双指捏合缩放。套索圈住笔迹或图片后可拖动。</p><p><strong>03 画笔提问</strong> 选择 AI 询问画笔，在文献上划线、画圈或做标记。可连续标记多处，输入提示词后点击发送。标记截图和提示词会一起交给 DeepSeek。</p><p><strong>04 分享批注</strong> 点击“导出与分享”，生成含笔迹和插图的 PDF，可发到微信。</p><div className="help-note">离线版请等“离线就绪”后使用。建议定期保存完整备份；清除网站数据会删除本机文献、笔记和离线资源。</div><button className="help-done" onClick={() => setHelp(false)}>开始使用</button></div></div>}
+    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="关闭说明" onClick={() => setHelp(false)}><X size={20} /></button><span className="eyebrow">QUICK START</span><h2>在 iPad 上开始阅读</h2><p><strong>01 导入文献</strong> 若要添加到主屏幕，请先添加并从图标打开，再导入 PDF。已有文献可在“完整备份”中生成 .paperink 文件，在新入口恢复。</p><p><strong>02 手写与整理</strong> Apple Pencil 写画时页面锁定、忽略手掌。需移动页面时，先选手掌图标，再拖动或双指捏合缩放。套索圈住笔迹或图片后可拖动。</p><p><strong>03 画笔提问</strong> 选择 AI 询问画笔，在文献上划线、画圈或做标记。可连续标记多处，输入提示词后点击发送。标记截图和提示词会一起交给 DeepSeek。</p><p><strong>04 便签笔记</strong> 选择便签图标，点页面放置标记。便签可手写或打字，点击收起后再点标记就能展开。套索可移动标记，完整备份保留便签内容。</p><p><strong>05 分享批注</strong> 点击“导出与分享”，生成含笔迹和插图的 PDF，可发到微信。</p><div className="help-note">离线版请等“离线就绪”后使用。建议定期保存完整备份；清除网站数据会删除本机文献、笔记和离线资源。</div><button className="help-done" onClick={() => setHelp(false)}>开始使用</button></div></div>}
   </main>;
 }

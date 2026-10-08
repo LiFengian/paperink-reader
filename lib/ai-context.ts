@@ -60,9 +60,11 @@ export async function createAiContext(document: ReaderDocument, pdf: PDFDocument
         if (mark.points.length === 1) context.lineTo(mark.points[0].x + 0.01, mark.points[0].y + 0.01);
         context.strokeStyle = mark.color; context.lineWidth = mark.width;
         context.globalAlpha = mark.tool === "highlighter" ? 0.38 : 1; context.stroke();
-      } else {
+      } else if (mark.type === "image") {
         const image = new Image(); image.src = mark.src; await image.decode();
         context.drawImage(image, mark.x, mark.y, mark.width, mark.height);
+      } else {
+        context.fillStyle = "#ffe89a"; context.fillRect(mark.x, mark.y, mark.width, mark.height);
       }
       context.restore();
     }

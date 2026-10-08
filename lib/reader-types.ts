@@ -19,7 +19,20 @@ export type ImageMark = {
   height: number;
 };
 
-export type Mark = Stroke | ImageMark;
+export type NoteMark = {
+  id: string;
+  type: "note";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  strokes: Stroke[];
+  noteWidth: number;
+  noteHeight: number;
+};
+
+export type Mark = Stroke | ImageMark | NoteMark;
 
 export type ReaderPage = {
   id: string;
@@ -52,4 +65,4 @@ export type ReaderDocument = {
   chat: ChatMessage[];
 };
 
-export type ToolName = "pan" | "pen" | "highlighter" | "eraser" | "lasso" | "ask";
+export type ToolName = "pan" | "pen" | "highlighter" | "eraser" | "lasso" | "ask" | "note";

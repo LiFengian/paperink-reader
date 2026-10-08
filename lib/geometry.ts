@@ -9,7 +9,7 @@ const polygonBoundsCache = new WeakMap<Point[], { left: number; right: number; t
 export function individualBounds(mark: Mark) {
   const existing = boundsCache.get(mark); if (existing) return existing;
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
-  if (mark.type === "image") { left = mark.x; right = mark.x + mark.width; top = mark.y; bottom = mark.y + mark.height; }
+  if (mark.type !== "stroke") { left = mark.x; right = mark.x + mark.width; top = mark.y; bottom = mark.y + mark.height; }
   else for (const point of mark.points) { left = Math.min(left, point.x); right = Math.max(right, point.x); top = Math.min(top, point.y); bottom = Math.max(bottom, point.y); }
   const bounds = { left, right, top, bottom }; boundsCache.set(mark, bounds); return bounds;
 }
@@ -50,7 +50,7 @@ export function movedMark(mark: Mark, dx: number, dy: number): Mark {
 }
 
 export function markNear(mark: Mark, point: Point) {
-  if (mark.type === "image") return point.x >= mark.x && point.x <= mark.x + mark.width && point.y >= mark.y && point.y <= mark.y + mark.height;
+  if (mark.type !== "stroke") return point.x >= mark.x && point.x <= mark.x + mark.width && point.y >= mark.y && point.y <= mark.y + mark.height;
   if (mark.points.length === 1) return Math.hypot(point.x - mark.points[0].x, point.y - mark.points[0].y) < 10;
   for (let i = 1; i < mark.points.length; i++) {
     const a = mark.points[i - 1], b = mark.points[i];
