@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AI_SYSTEM_PROMPT } from "../../../lib/ai-client";
+import { buildAiRequest } from "../../../lib/ai-client";
 import { hasPaperInkAccess } from "../../../lib/access";
 
 export const runtime = "edge";
@@ -19,6 +19,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
     const mode = body?.mode === "ocr" ? "ocr" : "chat";
+    const settings = body.settings as { effort?: string } | undefined;
+    const effort = settings?.effort === "none" ? "none" : settings?.effort === "max" ? "max" : "high";
     let messages: unknown[];
     if (mode === "ocr") {
       const image = body.image;
@@ -49,14 +51,9 @@ export async function POST(request: NextRequest) {
       if (safe.at(-1)?.role !== "user" || !safe.at(-1)?.content.trim()) {
         return NextResponse.json({ error: "请输入问题。" }, { status: 400 });
       }
-      messages = [
-        { role: "system", content: AI_SYSTEM_PROMPT },
-        ...safe.slice(0, -1),
-        { role: "user", content: images.length ? [
-          { type: "text", text: safe.at(-1)!.content },
-          ...images.map(image => ({ type: "image_url", image_url: { url: image, detail: "original" } })),
-        ] : safe.at(-1)!.content },
-      ];
+      const paper = typeof body.paper === "string" ? body.paper : "";
+      if (paper.length > 800_000) return NextResponse.json({ error: "全文内容过长，请拆分文献。" }, { status: 400 });
+      messages = buildAiRequest(safe, images as string[], { model: "deepseek-flash", effort }, paper).messages;
     }
 
     const response = await fetch("https://api.deepseek.com/chat/completions", {
@@ -67,11 +64,12 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         model: "deepseek-flash",
-        thinking: { type: "disabled" },
+        thinking: { type: mode === "ocr" || effort === "none" ? "disabled" : "enabled" },
+        reasoning_effort: mode === "ocr" ? "none" : effort,
         messages,
-        max_tokens: mode === "ocr" ? 1400 : 2200,
+        max_tokens: mode === "ocr" ? 1400 : effort === "none" ? 5000 : effort === "max" ? 32768 : 24576,
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(180_000),
     });
     if (!response.ok) {
       return NextResponse.json({ error: `DeepSeek 请求失败（${response.status}）。请检查 Key 或稍后重试。` }, { status: 502 });

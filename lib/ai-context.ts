@@ -12,6 +12,7 @@ export async function createAiContext(document: ReaderDocument, pdf: PDFDocument
   if (markedPages.length > 6) throw new Error("一次最多询问 6 页的标记，请先撤回部分标记。");
   if (!markedPages.length) throw new Error("标记所在页面已被删除，请重新标记。");
   const regions: Region[] = [], references: string[] = [];
+  const label = (page: ReaderPage) => `阅读器第 ${document.pages.findIndex(item => item.id === page.id) + 1} 页 · ${page.sourcePage === null ? "空白笔记页" : `原始 PDF 第 ${page.sourcePage} 页`}`;
   const pageNumbers = markedPages.map(page => document.pages.findIndex(item => item.id === page.id) + 1);
   for (const page of markedPages) {
     const pageRegions: Region[] = [];
@@ -20,7 +21,7 @@ export async function createAiContext(document: ReaderDocument, pdf: PDFDocument
       const selection = mark.selection || await identifyAiMark(pdf, page, mark.points);
       const resolved = { ...mark, selection };
       const text = (mark.textOverride ?? selection.text).trim();
-      if (text) references.push(`【第 ${document.pages.findIndex(item => item.id === page.id) + 1} 页 · 标记 ${index + 1}】\n${text}`);
+      if (text) references.push(`【${label(page)} · 标记 ${index + 1}】\n${text}`);
       const targets = selection.boxes.length ? selection.boxes : mark.points.map(point => ({ x: point.x, y: point.y, width: 0.01, height: 0.01 }));
       const target = targets.reduce(union);
       const padX = selection.boxes.length ? 12 : 36, padTop = selection.boxes.length ? 3 : 64, padBottom = selection.boxes.length ? 3 : 36;
@@ -80,7 +81,7 @@ export async function createAiContext(document: ReaderDocument, pdf: PDFDocument
     if (encoded.length > 1_500_000) encoded = canvas.toDataURL("image/jpeg", 0.7);
     if (encoded.length > 1_500_000) throw new Error("标记截图过大，请缩小标记范围后重试。");
     images.push(encoded);
-    imageLabels.push(`图片 ${images.length}：第 ${document.pages.findIndex(item => item.id === page.id) + 1} 页，标记 ${region.indices.sort((a, b) => a - b).join("、")}。细蓝框是定位出的提问对象；没有框时，细划线对应其上方紧邻的文字，圆圈对应圈内内容。`);
+    imageLabels.push(`图片 ${images.length}：${label(page)}，标记 ${region.indices.sort((a, b) => a - b).join("、")}。细蓝框是定位出的提问对象；没有框时，细划线对应其上方紧邻的文字，圆圈对应圈内内容。`);
     canvas.width = 0; canvas.height = 0;
   }
   if (images.reduce((total, image) => total + image.length, 0) > 6_000_000) throw new Error("本次标记内容过多，请分成两次提问。");

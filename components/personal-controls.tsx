@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Download, Settings2, X } from "lucide-react";
-import { getPersonalKey, setPersonalKey } from "../lib/ai-client";
+import { getPersonalKey, setPersonalKey, getAiSettings, setAiSettings, DEFAULT_AI_SETTINGS } from "../lib/ai-client";
+import type { AiSettings } from "../lib/ai-client";
 import { createLibraryBackup, importLibraryBackup, shareBackup } from "../lib/library-backup";
 import { saveDocument } from "../lib/local-store";
 import type { ReaderDocument } from "../lib/reader-types";
@@ -10,6 +11,7 @@ import { version } from "../package.json";
 
 export function PersonalControls({ personal, current, disabled, onRestored }: { personal: boolean; current: ReaderDocument | null; disabled: boolean; onRestored: () => Promise<void> }) {
   const [open, setOpen] = useState(false), [key, setKey] = useState("");
+  const [ai, setAi] = useState<AiSettings>(DEFAULT_AI_SETTINGS);
   const [working, setWorking] = useState(false), [notice, setNotice] = useState("");
   const [backup, setBackup] = useState<Blob | null>(null);
   const [offline, setOffline] = useState("正在准备离线资源…");
@@ -41,7 +43,7 @@ export function PersonalControls({ personal, current, disabled, onRestored }: { 
 
   function show() {
     setNotice(""); setOpen(true);
-    if (personal) { try { setKey(getPersonalKey()); } catch { setNotice("无法读取本机 Key，请检查浏览器存储设置。"); } }
+    if (personal) { try { setKey(getPersonalKey()); setAi(getAiSettings()); } catch { setNotice("无法读取本机 Key，请检查浏览器存储设置。"); } }
   }
   async function makeBackup() {
     setWorking(true); setNotice("正在整理原始 PDF、可编辑笔记和聊天记录…"); setBackup(null);
@@ -86,7 +88,10 @@ export function PersonalControls({ personal, current, disabled, onRestored }: { 
           {waiting && <button className="personal-action" disabled={working} onClick={() => void updateApp()}>保存笔记并更新阅读器</button>}
           <p className="storage-state">{storage}</p><button className="personal-action secondary" onClick={() => void persist()} disabled={working}>申请持久保存</button>
         </div>
-        <div className="personal-section"><h3>DeepSeek 设置</h3><p>Key 只保存在这台设备，不包含在备份中。问题、定位原文和标记截图直接发给 DeepSeek。</p>
+        <div className="personal-section"><h3>DeepSeek 设置</h3><p>Key 只保存在这台设备，不包含在备份中。发送问题时，全文文字、定位原文和标记截图会交给 DeepSeek。</p>
+          <label htmlFor="ai-model">模型</label><select id="ai-model" value={ai.model} disabled={working} onChange={event => { const next = { ...ai, model: event.target.value as AiSettings["model"] }; try { setAiSettings(next); setAi(next); } catch { setNotice("设置保存失败。"); } }}><option value="deepseek-flash">Flash · 兼顾速度与费用</option><option value="deepseek-v4-pro">Pro · 深度解读</option></select>
+          <label htmlFor="ai-effort">思考深度</label><select id="ai-effort" value={ai.effort} disabled={working} onChange={event => { const next = { ...ai, effort: event.target.value as AiSettings["effort"] }; try { setAiSettings(next); setAi(next); } catch { setNotice("设置保存失败。"); } }}><option value="high">深度思考（默认）</option><option value="max">更深入思考</option><option value="none">快速回答</option></select>
+          <p>Pro 费用更高；含图片时先由 Flash 转写，再交给 Pro。更深入思考会增加等待和 API 用量。</p>
           <label htmlFor="personal-api-key">DeepSeek API Key</label><input id="personal-api-key" type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder="粘贴你的 API Key" disabled={working} />
           <div className="personal-actions"><button className="personal-action" disabled={working || !key.trim()} onClick={() => { try { setPersonalKey(key); setNotice("Key 已保存到这台设备。"); } catch { setNotice("Key 保存失败，请检查浏览器存储设置。"); } }}>保存 Key</button>
           <button className="personal-action secondary" disabled={working} onClick={() => { try { setPersonalKey(""); setKey(""); setNotice("本机 Key 已移除。"); } catch { setNotice("无法移除 Key，请检查存储设置。"); } }}>移除 Key</button></div>
