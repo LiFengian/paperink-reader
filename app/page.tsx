@@ -12,7 +12,7 @@ import { readWholePaper, paperReference } from "../lib/paper-context";
 import { getAiSettings } from "../lib/ai-client";
 import { InkMarks } from "../components/ink-marks";
 import { StickyNoteEditor } from "../components/sticky-note-editor";
-import { createStickyNote, moveStickyNote } from "../lib/sticky-notes";
+import { createStickyNote, moveStickyNote, resizeStickyNote } from "../lib/sticky-notes";
 import { PersonalControls } from "../components/personal-controls";
 import { askAi } from "../lib/ai-client";
 import { pdfRaster } from "../lib/pdf-raster";
@@ -412,12 +412,21 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     if (!doc || !page) return;
     setSelected([]); setActiveNote({ documentId: doc.id, pageId: page.id, markId, before: page.marks });
   }
-  function updateNote(change: Partial<Pick<NoteMark, "text" | "strokes">>) {
+  function updateNote(change: Partial<Pick<NoteMark, "text" | "strokes" | "images">>) {
     if (!activeNote) return;
     lastInput.current = performance.now();
     updateDoc(current => current.id !== activeNote.documentId ? current : {
       ...current, pages: current.pages.map(item => item.id !== activeNote.pageId ? item : {
         ...item, marks: item.marks.map(mark => mark.type === "note" && mark.id === activeNote.markId ? { ...mark, ...change } : mark),
+      }),
+    });
+  }
+  function resizeNote(percent: number) {
+    if (!activeNote) return;
+    lastInput.current = performance.now();
+    updateDoc(current => current.id !== activeNote.documentId ? current : {
+      ...current, pages: current.pages.map(item => item.id !== activeNote.pageId ? item : {
+        ...item, marks: item.marks.map(mark => mark.type === "note" && mark.id === activeNote.markId ? resizeStickyNote(mark, percent, item) : mark),
       }),
     });
   }
@@ -738,7 +747,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       </> : <div className="welcome"><div className="welcome-art"><div className="art-page back" /><div className="art-page front"><div className="art-lines"><i /><i /><i /><i /></div><span>∿</span></div><b>✦</b></div><span className="eyebrow">YOUR READING DESK</span><h1>让思考留在文献旁边。</h1><p>导入 PDF，用 Apple Pencil 写下想法，标记看不懂的内容，写下提示词后向 AI 提问。</p><button className="welcome-import" onClick={() => pdfInput.current?.click()}><Plus size={19} />导入第一篇文献</button><div className="welcome-steps"><span><PenLine size={16} />自由批注</span><span><Lasso size={16} />套索整理</span><span><Paintbrush size={16} />画笔问 AI</span></div></div>}</section>
       {chatOpen && <aside className="chat-panel"><div className="chat-heading"><div className="chat-heading-icon"><Sparkles size={20} /></div><div><span className="eyebrow">READING COMPANION</span><h2>AI 助读</h2></div><button className="plain-icon compact chat-close" aria-label="关闭 AI 助读" onClick={() => setChatOpen(false)}><X size={19} /></button></div><div className="paper-context-status"><span>{paperStatus}</span><small>{aiLabel} · 提问时参考全文</small></div><div ref={chatMessages} className="chat-messages">{doc?.chat.length ? doc.chat.map(item => <div className={`chat-message ${item.role}`} key={item.id}>{item.role === "assistant" && <span className="assistant-avatar">✦</span>}<div className="message-body">{item.quotedText && <div className="message-quote">“{item.quotedText.slice(0, 230)}{item.quotedText.length > 230 ? "…" : ""}”</div>}{item.images?.length ? <div className="message-images">{item.images.map((src, index) => <img key={index} src={src} alt={`本次提问的标记内容 ${index + 1}`} loading="lazy" />)}</div> : null}<p>{item.content}</p></div></div>) : <div className="chat-empty"><span>✦</span><h3>读到哪里，问到哪里</h3><p>用 <strong>AI 询问画笔</strong> 划线或画圈，输入提示词后一起发送。也可以直接打字提问。</p><button onClick={() => setPrompt("请先通读整篇文献，概括研究问题、方法、贡献、实验结论和局限，并标注原始 PDF 页码。")}>生成全文导读 <ChevronRight size={15} /></button><button onClick={() => setPrompt("请帮我梳理这页的主要论证。")}>梳理主要论证 <ChevronRight size={15} /></button></div>}{busy && <div className="typing-indicator"><i /><i /><i /></div>}</div><div className="chat-composer">{aiMarks.length > 0 && <div className="ai-mark-summary"><div><Paintbrush size={17} /><strong>已标记 {aiMarks.length} 处</strong><span>第 {aiPageNumbers.join("、")} 页</span></div><p>已定位的原文可核对、修正，再与提示词一起发送。</p><div className="ai-excerpt-list">{aiMarks.map((mark, index) => <label className="ai-excerpt" key={mark.id}><span>标记 {index + 1} · 第 {doc ? doc.pages.findIndex(item => item.id === mark.pageId) + 1 : 1} 页{!mark.selection ? " · 正在定位…" : mark.selection.boxes.length ? " · 已定位" : " · 截图识别"}</span><textarea aria-label={`标记 ${index + 1} 的原文`} rows={2} value={mark.textOverride ?? mark.selection?.text ?? ""} disabled={busy || !mark.selection} onChange={event => setAiMarks(marks => marks.map(item => item.id === mark.id ? { ...item, textOverride: event.target.value } : item))} placeholder="此处将使用高清截图；也可补充原文" /></label>)}</div><div className="ai-mark-actions"><button aria-label="撤回上一笔 AI 标记" disabled={busy} onClick={undoAiMark}><Undo2 size={13} />撤回上一笔</button><button aria-label="清空 AI 标记" disabled={busy} onClick={clearAiMarks}><X size={13} />清空标记</button></div></div>}<div className="composer-box"><textarea aria-label="向 AI 提问" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={doc ? aiMarks.length ? "输入提示词：想怎样解读这些标记？" : "输入问题，或先用 AI 画笔标记…" : "先导入一份 PDF 文献"} disabled={!doc || busy} rows={3} /><div><span>Enter 发送 · Shift + Enter 换行</span><button aria-label="发送消息" disabled={!doc || busy || !prompt.trim()} onClick={() => void sendMessage()}><Send size={17} /></button></div></div></div></aside>}
     </div>
-    {openedNote && <StickyNoteEditor key={openedNote.id} note={openedNote} pageNumber={(doc?.currentPage || 0) + 1} onChange={updateNote} onClose={closeNote} onDelete={deleteNote} onActivity={() => { lastInput.current = performance.now(); }} />}
+    {openedNote && <StickyNoteEditor key={openedNote.id} note={openedNote} pageNumber={(doc?.currentPage || 0) + 1} onChange={updateNote} onResize={resizeNote} onClose={closeNote} onDelete={deleteNote} onActivity={() => { lastInput.current = performance.now(); }} />}
     {message && <div className="status-toast" role="status"><span>{message}</span><button aria-label="关闭提示" onClick={() => setMessage("")}><X size={14} /></button></div>}
     {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="关闭说明" onClick={() => setHelp(false)}><X size={20} /></button><span className="eyebrow">QUICK START</span><h2>在 iPad 上开始阅读</h2><p><strong>01 导入文献</strong> 若要添加到主屏幕，请先添加并从图标打开，再导入 PDF。已有文献可在“完整备份”中生成 .paperink 文件，在新入口恢复。</p><p><strong>02 手写与整理</strong> Apple Pencil 写画时页面锁定、忽略手掌。需移动页面时，先选手掌图标，再拖动或双指捏合缩放。套索圈住笔迹或图片后可拖动。</p><p><strong>03 画笔提问</strong> 选择 AI 询问画笔，在文献上划线、画圈或做标记。可连续标记多处，输入提示词后点击发送。标记截图和提示词会一起交给 DeepSeek。</p><p><strong>04 便签笔记</strong> 选择便签图标，点页面放置标记。便签可手写或打字，点击收起后再点标记就能展开。按住标记可直接拖动，也可用套索移动，完整备份保留便签内容。</p><p><strong>05 分享批注</strong> 点击“导出与分享”，生成含笔迹和插图的 PDF，可发到微信。</p><div className="help-note">离线版请等“离线就绪”后使用。建议定期保存完整备份；清除网站数据会删除本机文献、笔记和离线资源。</div><button className="help-done" onClick={() => setHelp(false)}>开始使用</button></div></div>}
   </main>;

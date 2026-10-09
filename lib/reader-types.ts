@@ -19,6 +19,8 @@ export type ImageMark = {
   height: number;
 };
 
+export type NoteImage = Pick<ImageMark, "id" | "src" | "width" | "height"> & { name?: string };
+
 export type NoteMark = {
   id: string;
   type: "note";
@@ -28,6 +30,7 @@ export type NoteMark = {
   height: number;
   text: string;
   strokes: Stroke[];
+  images?: NoteImage[];
   noteWidth: number;
   noteHeight: number;
 };

@@ -38,6 +38,10 @@ export function validateBackupDocument(value: unknown): asserts value is ReaderD
           || !finite(mark.noteHeight) || mark.noteHeight <= 0 || mark.noteHeight > 4096
           || !Array.isArray(mark.strokes) || mark.strokes.some(item => !stroke(item))
           || new Set(mark.strokes.map(item => item.id)).size !== mark.strokes.length) return fail();
+        if (mark.images !== undefined && (!Array.isArray(mark.images) || mark.images.some(item => !record(item)
+          || typeof item.id !== "string" || !item.id || !image(item.src) || !finite(item.width) || item.width <= 0
+          || !finite(item.height) || item.height <= 0 || (item.name !== undefined && typeof item.name !== "string"))
+          || new Set(mark.images.map(item => item.id)).size !== mark.images.length)) return fail();
       } else return fail();
     }
   }

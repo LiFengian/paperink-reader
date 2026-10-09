@@ -77,7 +77,7 @@ test("real IndexedDB: legacy upgrade, incremental edits, queued saves, rollback,
     check(JSON.stringify(current) === JSON.stringify(original), 'v1 upgrade changed notes');
     check((await store.getPdf(current.id)).size === 21, 'v1 upgrade lost original PDF');
     const writes = [], nativePut = IDBObjectStore.prototype.put;
-    IDBObjectStore.prototype.put = function(value, ...args) { writes.push({store:this.name, id:value?.id}); return nativePut.call(this,value,...args); };
+    IDBObjectStore.prototype.put = function(value, ...args) { writes.push({store:this.name, id:value?.id, chars:JSON.stringify(value).length}); return nativePut.call(this,value,...args); };
     const kept = current.pages[0].marks[0];
     const extra = {...kept,id:'ink-b',points:[{x:200,y:20},{x:300,y:20}]};
     current = {...current,updatedAt:2,pages:[{...current.pages[0],marks:[kept,extra]},current.pages[1]]};
@@ -96,31 +96,48 @@ test("real IndexedDB: legacy upgrade, incremental edits, queued saves, rollback,
     check(rejected && (await store.getDocument('legacy')).updatedAt === 4,'failed transaction partially changed document');
     current = {...second,updatedAt:6,pages:[{...second.pages[0],marks:[kept]},original.pages[1]],currentPage:1};
     await store.saveDocument(current);
-    window.expected = current;
+    const image = {id:'photo',src:'data:image/png;base64,'+'A'.repeat(100000),width:200,height:100,name:'photo.png'};
+    const note = {id:'note',type:'note',x:100,y:100,width:28,height:28,text:'Image note',strokes:[],noteWidth:480,noteHeight:320,images:[image]};
+    current = {...current,updatedAt:7,pages:[{...current.pages[0],marks:[kept,note]},current.pages[1]]};
+    await store.saveDocument(current);
+    writes.length=0;
+    const resized = {...note,x:86,y:86,width:56,height:56,text:'Resized note with retained photo'};
+    current = {...current,updatedAt:8,pages:[{...current.pages[0],marks:[kept,resized]},current.pages[1]]};
+    await store.saveDocument(current);
+    check(!writes.some(item=>item.store==='note-images'),'resize or text edit rewrote unchanged image bytes');
+    check(writes.filter(item=>item.store==='mark-deltas').every(item=>item.chars<2000),'note metadata still contains the large photo');
+    const noImage={...resized,images:[]};
+    await store.saveDocument({...current,updatedAt:9,pages:[{...current.pages[0],marks:[kept,noImage]},current.pages[1]]});
+    await store.saveDocument(current); // Undo image deletion restores the image record.
     // Restore is atomic: collision on the second entry must roll back the first.
-    const restored = {...original,id:'restore-a'}, collision = {...original,id:'legacy'};
+    const restored = {...original,id:'restore-a',pages:[{...original.pages[0],marks:[resized]},original.pages[1]]}, collision = {...original,id:'legacy'};
     rejected = false;
     try { await store.restoreDocuments([{document:restored,pdf:new Blob(['PDF'])},{document:collision,pdf:new Blob(['PDF'])}]); } catch { rejected = true; }
     check(rejected && !(await store.getDocument('restore-a')),'restore failure left a partial import');
     await store.restoreDocuments([{document:restored,pdf:new Blob(['restored PDF'])}]);
     check((await store.getDocument('restore-a')).pages.length === 2,'successful restore lost pages');
     IDBObjectStore.prototype.put = nativePut;
-    return {expected:current, writes:writes.length};
+    return {expected:current, image: image.src, writes:writes.length};
   })()`);
   // A fresh JS realm clears all module caches, then reconstructs persisted deltas.
   await send("Page.reload");
   await delay(150);
-  const expected = JSON.stringify(result.expected);
+  const persisted = await evaluate("(async()=>{const store=await import('/store.js');return store.getDocument('legacy')})()");
+  assert.deepEqual(persisted, result.expected, "reload retains normalized photos, note size, text and other page edits");
   const reloaded = await evaluate(`(async () => {
     const store = await import('/store.js'), document = await store.getDocument('legacy');
-    if (JSON.stringify(document) !== ${JSON.stringify(expected)}) throw Error('reload lost delta edits, undo, chat or blank page');
+    const restored=await store.getDocument('restore-a');
+    await store.saveDocument({...restored,pages:[{...restored.pages[0],marks:[{...restored.pages[0].marks[0],text:'Edited restored note'}]},restored.pages[1]]});
     await store.deleteDocument('legacy');
     if (await store.getDocument('legacy') || await store.getPdf('legacy')) throw Error('deleted document is still readable');
     const db = await new Promise((resolve,reject)=>{const request=indexedDB.open('paperink-local-v1');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});
-    const counts = await Promise.all(['page-meta','mark-deltas'].map(name=>new Promise((resolve,reject)=>{const request=db.transaction(name).objectStore(name).index('documentId').count('legacy');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})));
+    const counts = await Promise.all(['page-meta','mark-deltas','note-images'].map(name=>new Promise((resolve,reject)=>{const request=db.transaction(name).objectStore(name).index('documentId').count('legacy');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})));
     db.close();
     if (counts.some(Boolean)) throw Error('deletion left orphaned page or stroke deltas');
     return (await store.listDocuments()).map(item=>item.id);
   })()`);
   assert.deepEqual(reloaded, ["restore-a"]);
+  await send("Page.reload"); await delay(150);
+  const restoredImage = await evaluate("(async()=>{const store=await import('/store.js');return (await store.getDocument('restore-a')).pages[0].marks[0].images[0].src})()");
+  assert.equal(restoredImage, result.image, "restored photos remain available after their note is edited and reopened");
 });
