@@ -178,6 +178,9 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .composer-box>div{display:flex;justify-content:space-between;align-items:center}
 .composer-box>div span{font-size:9px;color:#a3aeac}
 .composer-box button{border:0;width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:#2d7065;color:#fff}
+.composer-actions{display:flex;align-items:center;gap:6px}
+.composer-box .quick-translate{width:32px;height:32px;background:#e8f2eb;color:#2d7065;font-size:14px;font-weight:700}
+.composer-box .quick-translate:hover:not(:disabled){background:#d8eade}
 .status-toast{position:fixed;left:50%;bottom:68px;transform:translateX(-50%);z-index:30;background:#263e42;color:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(29,46,47,.2);display:flex;align-items:center;gap:15px;padding:10px 12px 10px 16px;font-size:12px;max-width:min(90vw,500px)}
 .status-toast button{border:0;background:transparent;color:#b7d1c8;display:grid;place-items:center;padding:2px}
 .modal-backdrop{position:fixed;inset:0;background:rgba(20,35,34,.32);display:grid;place-items:center;z-index:50;padding:20px}
