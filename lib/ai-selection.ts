@@ -114,7 +114,7 @@ async function pageTextRuns(pdf: PDFDocumentProxy, pageNumber: number): Promise<
   if (!pending) {
     pending = (async () => {
       const source = await pdf.getPage(pageNumber), content = await source.getTextContent();
-      const viewport = source.getViewport({ scale: 1 }), pdfjs = await import("pdfjs-dist");
+      const viewport = source.getViewport({ scale: 1 }), pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       const measure = window.document.createElement("canvas").getContext("2d");
       const runs: TextRun[] = [];
       for (const item of content.items) {

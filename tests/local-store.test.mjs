@@ -109,6 +109,24 @@ test("real IndexedDB: legacy upgrade, incremental edits, queued saves, rollback,
     const noImage={...resized,images:[]};
     await store.saveDocument({...current,updatedAt:9,pages:[{...current.pages[0],marks:[kept,noImage]},current.pages[1]]});
     await store.saveDocument(current); // Undo image deletion restores the image record.
+    // A PDF import either saves all its bytes + page metadata, or nothing.
+    const fresh = {...original,id:'new-import',pages:original.pages.map(page=>({...page,marks:[]})),chat:[]};
+    const freshPdf = new Blob(['%PDF new import'], {type:'application/pdf'});
+    const nativeAdd = IDBObjectStore.prototype.add;
+    IDBObjectStore.prototype.add = function(...args) {
+      if(this.name==='page-meta')throw new DOMException('Simulated quota failure','QuotaExceededError');
+      return nativeAdd.apply(this,args);
+    };
+    let importRejected = false;
+    try { await store.saveImportedPdf(fresh,freshPdf); } catch { importRejected = true; }
+    IDBObjectStore.prototype.add = nativeAdd;
+    check(importRejected && !(await store.getPdf(fresh.id)) && !(await store.getDocument(fresh.id)), 'failed PDF import left orphan bytes or metadata');
+    await store.saveImportedPdf(fresh,freshPdf);
+    check((await store.getPdf(fresh.id)).size===freshPdf.size && (await store.getDocument(fresh.id)).pages.length===2,'fresh PDF import lost bytes or pages');
+    importRejected=false;
+    try { await store.saveImportedPdf({...fresh,name:'Must not overwrite'},new Blob(['wrong bytes'])); } catch { importRejected=true; }
+    check(importRejected && (await store.getDocument(fresh.id)).name===fresh.name && (await store.getPdf(fresh.id)).size===freshPdf.size,'asynchronous import collision changed existing PDF');
+    await store.deleteDocument(fresh.id);
     // Restore is atomic: collision on the second entry must roll back the first.
     const restored = {...original,id:'restore-a',pages:[{...original.pages[0],marks:[resized]},original.pages[1]]}, collision = {...original,id:'legacy'};
     rejected = false;

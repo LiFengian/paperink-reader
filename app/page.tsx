@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { ArrowDownToLine, BookOpen, ChevronLeft, ChevronRight, CircleHelp, Eraser, FileMinus2, FilePlus2, FolderOpen, Hand, Highlighter, ImagePlus, Lasso, Menu, MessageCircle, Minus, Paintbrush, PenLine, Plus, Redo2, Send, Sparkles, StickyNote, Trash2, Undo2, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+import { pdfImportErrorMessage } from "../lib/pdf-errors";
+import type { PdfImportStage } from "../lib/pdf-errors";
 import { useReaderNavigation } from "../components/use-reader-navigation";
 import { eraseMarks } from "../lib/eraser";
 import type { EraserMode } from "../lib/eraser";
@@ -19,7 +21,7 @@ import { pdfRaster } from "../lib/pdf-raster";
 import { createShareablePdf } from "../lib/export-pdf";
 import { createAiContext } from "../lib/ai-context";
 import { aiStrokeKind, identifyAiMark } from "../lib/ai-selection";
-import { deleteDocument, getPdf, listDocuments, saveDocument, savePdf } from "../lib/local-store";
+import { deleteDocument, getPdf, listDocuments, saveDocument, saveImportedPdf } from "../lib/local-store";
 import { clamp, markBounds, markInPolygon, movedMark, pathFromPoints } from "../lib/geometry";
 import type { AiMark, AiSelection, ChatMessage, Mark, NoteMark, Point, ReaderDocument, ReaderPage, Stroke, ToolName } from "../lib/reader-types";
 
@@ -40,13 +42,6 @@ function pdfResources(personal: boolean) {
     standardFontDataUrl: new URL("./pdfjs/standard_fonts/", document.baseURI).href,
     wasmUrl: new URL("./pdfjs/wasm/", document.baseURI).href,
   } : {};
-}
-
-function pdfImportErrorMessage(error: unknown) {
-  if (error instanceof Error && error.name === "PasswordException") return "这个 PDF 需要密码，暂时无法导入。";
-  if (error instanceof Error && error.name === "InvalidPDFException") return "PDF 文件结构损坏，无法导入。";
-  if (error instanceof Error && error.name === "QuotaExceededError") return "设备存储空间不足，无法保存 PDF。";
-  return "PDF 导入失败，请刷新页面后重试。";
 }
 
 function ToolButton({ label, active, disabled, onClick, children }: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -260,12 +255,12 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     if (doc) (async () => {
       const blob = await getPdf(doc.id);
       if (!blob || cancelled) return;
-      const pdfjs = await import("pdfjs-dist");
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
       task = pdfjs.getDocument({ data: await blob.arrayBuffer(), ...pdfResources(personal) });
       const opened = await (task as ReturnType<typeof pdfjs.getDocument>).promise;
       if (!cancelled) setPdf(opened);
-    })().catch(() => { if (!cancelled) setMessage("PDF 加载失败，请尝试重新导入。"); });
+    })().catch(error => { if (!cancelled) setMessage(pdfImportErrorMessage(error)); });
     return () => { cancelled = true; task?.destroy().catch(() => {}); };
   }, [doc?.id]);
   useEffect(() => {
@@ -381,28 +376,37 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const redo = () => { if (tool === "ask") { redoAiMark(); return; } const entry = redoStack.current.pop(); if (entry) { undoStack.current.push(entry); applyHistory(entry, "after"); } };
 
   async function importPdf(file: File) {
-    if (!file.name.toLowerCase().endsWith(".pdf")) { setMessage("请选择 PDF 文件。"); return; }
+    if (busy) return;
+    if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") { setMessage("请选择 PDF 文件。"); return; }
     setBusy(true); setMessage("正在读取 PDF…");
+    let stage: PdfImportStage = "read";
+    let task: { destroy: () => Promise<void> } | null = null;
     try {
       const bytes = await file.arrayBuffer();
-      const pdfjs = await import("pdfjs-dist");
+      if (!bytes.byteLength) throw new Error("PDF 文件为空，请确认文件已下载完成。");
+      stage = "engine";
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-      const task = pdfjs.getDocument({ data: bytes.slice(0), ...pdfResources(personal) });
-      const opened = await task.promise;
+      stage = "parse";
+      const loading = pdfjs.getDocument({ data: bytes.slice(0), ...pdfResources(personal) });
+      task = loading;
+      const opened = await loading.promise;
+      stage = "pages";
       const pages: ReaderPage[] = [];
       for (let i = 1; i <= opened.numPages; i++) {
         const source = await opened.getPage(i);
         const viewport = source.getViewport({ scale: 1 });
         pages.push({ id: uid(), sourcePage: i, width: viewport.width, height: viewport.height, marks: [] });
+        source.cleanup();
       }
-      await task.destroy();
+      await task.destroy(); task = null;
       const next: ReaderDocument = { id: uid(), name: file.name, createdAt: Date.now(), updatedAt: Date.now(), currentPage: 0, pages, chat: [] };
-      await savePdf(next.id, file);
-      await saveDocument(next);
+      stage = "save";
+      await saveImportedPdf(next, new Blob([bytes], { type: "application/pdf" }));
       setLibrary(items => [next, ...items]); setDoc(next); setZoom(1); setLibraryOpen(false);
       setMessage(`已导入 ${pages.length} 页，文件保存在此设备。`);
-    } catch (error) { console.error("PDF import failed", error); setMessage(pdfImportErrorMessage(error)); }
-    finally { setBusy(false); if (pdfInput.current) pdfInput.current.value = ""; }
+    } catch (error) { console.error(`PDF import failed (${stage})`, error); setMessage(pdfImportErrorMessage(error, stage)); }
+    finally { await task?.destroy().catch(() => {}); setBusy(false); if (pdfInput.current) pdfInput.current.value = ""; }
   }
   function changePage(index: number) {
     if (!doc) return;

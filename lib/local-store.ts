@@ -149,6 +149,20 @@ export async function savePdf(id: string, file: Blob): Promise<IDBValidKey> {
   const db = await openDatabase(), transaction = db.transaction("pdfs", "readwrite"), done = complete(transaction);
   transaction.objectStore("pdfs").put(file, id); await done; return id;
 }
+// New imports must save their PDF and page metadata together, or leave no records.
+export async function saveImportedPdf(document: ReaderDocument, file: Blob): Promise<void> {
+  if (document.pages.some(page => page.marks.length) || document.chat.length) throw new Error("新导入的 PDF 不应包含已有笔记。");
+  const db = await openDatabase(), transaction = db.transaction(["pdfs", META, PAGES, CHATS], "readwrite"), done = complete(transaction);
+  const revision = crypto.randomUUID();
+  try {
+    const { pages, chat, ...attributes } = document;
+    transaction.objectStore("pdfs").add(file, document.id);
+    transaction.objectStore(META).add({ ...attributes, pageIds: pages.map(page => page.id), revision });
+    for (const { marks: _marks, ...page } of pages) transaction.objectStore(PAGES).add({ ...page, documentId: document.id, markIds: [] });
+    transaction.objectStore(CHATS).add(chat, document.id);
+  } catch (error) { transaction.abort(); await done.catch(() => {}); throw error; }
+  await done; remember(document, revision);
+}
 export async function getPdf(id: string): Promise<Blob | undefined> {
   const db = await openDatabase(), transaction = db.transaction("pdfs", "readonly"), done = complete(transaction);
   const result = await value<Blob | undefined>(transaction.objectStore("pdfs").get(id)); await done; return result;
