@@ -34,7 +34,7 @@ export function StickyNoteEditor({ note, pageNumber, onChange, onResize, onClose
   const latestNote = useRef(note); latestNote.current = note;
   const surface = useRef<HTMLDivElement>(null), live = useRef<HTMLCanvasElement>(null);
   const input = useRef<Input | null>(null), frame = useRef<number | null>(null);
-  const close = useRef(onClose); close.current = () => { if (!insertingRef.current) onClose(); };
+  const close = useRef(onClose); close.current = () => { if (!insertingRef.current && !input.current) onClose(); };
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -134,7 +134,8 @@ export function StickyNoteEditor({ note, pageNumber, onChange, onResize, onClose
     }
   }
 
-  return <div className="sticky-note-backdrop" onClick={event => { if (event.target === event.currentTarget) close.current(); }}>
+  // Palm touches outside the writing surface must not dismiss an open note.
+  return <div className="sticky-note-backdrop">
     <section className="sticky-note-dialog" role="dialog" aria-modal="true" aria-labelledby="sticky-note-title" tabIndex={-1}>
       <header className="sticky-note-heading"><span className="sticky-note-symbol"><StickyNote size={22} /></span><div><h2 id="sticky-note-title">便签</h2><small>第 {pageNumber} 页 · 随时收起，再点标记展开</small></div><button className="plain-icon" aria-label="收起便签" title="收起便签" disabled={inserting} onClick={() => close.current()}><X size={20} /></button></header>
       <input ref={fileInput} className="hidden-input sticky-note-file-input" type="file" accept="image/*" multiple aria-label="选择便签图片" onChange={event => { void insertImages(Array.from(event.target.files || [])); }} />
