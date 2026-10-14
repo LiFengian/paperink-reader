@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { version } from "./package.json";
 import { createHash } from "node:crypto";
 import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -31,7 +32,7 @@ export default defineConfig({
       for (const path of paths) { digest.update(relative(output, path)); digest.update(await readFile(path)); }
       const resources = paths.map(path => `./${relative(output, path).replaceAll("\\", "/")}`);
       const template = await readFile(resolve(project, "personal/service-worker.js"), "utf8");
-      await writeFile(join(output, "sw.js"), template.replace("__CACHE_VERSION__", digest.digest("hex").slice(0, 20)).replace("__PRECACHE_FILES__", JSON.stringify(resources)));
+      await writeFile(join(output, "sw.js"), template.replace("__CACHE_VERSION__", digest.digest("hex").slice(0, 20)).replace("__APP_VERSION__", version).replace("__PRECACHE_FILES__", JSON.stringify(resources)));
     },
   }],
   build: { outDir: output, emptyOutDir: true, target: "es2022" },

@@ -1,6 +1,7 @@
 /* The build embeds every reader asset, PDF worker, font, CMap and WASM file. */
 const PREFIX = "paperink-offline-" + encodeURIComponent(self.registration.scope) + "-";
 const CACHE = PREFIX + "__CACHE_VERSION__";
+const APP_VERSION = "__APP_VERSION__";
 const RESOURCES = __PRECACHE_FILES__;
 const scope = self.registration.scope;
 const assetUrls = new Set(RESOURCES.map(path => new URL(path, scope).href));
@@ -23,6 +24,7 @@ self.addEventListener("activate", event => {
   })());
 });
 self.addEventListener("message", event => {
+  if (event.data?.type === "GET_VERSION") event.ports[0]?.postMessage({ version: APP_VERSION });
   if (event.data?.type === "ACTIVATE_UPDATE") event.waitUntil(self.skipWaiting());
 });
 self.addEventListener("fetch", event => {
