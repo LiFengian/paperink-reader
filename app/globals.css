@@ -149,6 +149,19 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .message-body{max-width:88%;padding:11px 13px;border-radius:12px;font-size:12px;line-height:1.75;color:#4a5b60;background:#f3f6f4;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-message.user .message-body{background:#e7f1ed;color:#345c55}
 .message-body p{margin:0}
+.message-body .ai-answer{white-space:normal;min-width:0}
+.ai-answer>p+p,.ai-answer>p+div,.ai-answer>div+p{margin-top:10px}
+.ai-answer h1,.ai-answer h2,.ai-answer h3,.ai-answer h4,.ai-answer h5,.ai-answer h6{font-size:13px;line-height:1.5;margin:14px 0 7px;color:#31484b}
+.ai-answer>:first-child{margin-top:0}.ai-answer>:last-child{margin-bottom:0}
+.ai-answer ul,.ai-answer ol{margin:8px 0;padding-left:20px}.ai-answer li+li{margin-top:5px}
+.ai-answer blockquote{margin:8px 0;padding-left:10px;border-left:2px solid #95b8a6;color:#6c817a}
+.ai-answer a{color:#2d7065;text-decoration:underline}.ai-answer hr{border:0;border-top:1px solid #dbe3de;margin:12px 0}
+.ai-answer pre{max-width:100%;overflow-x:auto;background:#e9eeeb;padding:10px;border-radius:7px;white-space:pre;font-size:11px}
+.ai-answer code{background:#e9eeeb;border-radius:3px;padding:1px 3px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.ai-answer pre code{padding:0;background:none}
+.ai-answer .katex{font-size:1.12em;white-space:nowrap;overflow-wrap:normal}.ai-answer .katex-display{margin:12px 0;max-width:100%;overflow-x:auto;overflow-y:hidden;padding:5px 2px;-webkit-overflow-scrolling:touch}
+.ai-answer .katex-display>.katex{text-align:left}.ai-answer .katex-error{font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ai-table-scroll{max-width:100%;overflow-x:auto}.ai-answer table{border-collapse:collapse;margin:8px 0;font-size:11px}.ai-answer td,.ai-answer th{border:1px solid #dbe3de;padding:5px 7px}
+.chat-message.assistant{min-width:0}.chat-message.assistant .message-body{min-width:0;flex:1}
 .message-quote{border-left:2px solid #95b8a6;padding-left:8px;margin-bottom:8px;color:#7c9188;font-size:11px;max-height:100px;overflow:hidden}
 .typing-indicator{display:flex;gap:4px;padding:7px 10px}
 .typing-indicator i{width:5px;height:5px;border-radius:50%;background:#8bb6a0;animation:pulse 1.2s infinite ease-in-out}
