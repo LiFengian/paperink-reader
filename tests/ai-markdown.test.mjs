@@ -40,7 +40,7 @@ test("ordinary code, unclosed code fences and existing dollar math are preserved
 const source = await readFile(new URL("../components/ai-message.tsx", import.meta.url), "utf8");
 const javascript = ts.transpileModule(source.replace('import "katex/dist/katex.min.css";', ""), {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
-}).outputText.replace(/from "([^"]+)"/g, (_, name) => `from ${JSON.stringify(name === "../lib/ai-markdown" ? new URL("../lib/ai-markdown.ts", import.meta.url).href : import.meta.resolve(name))}`);
+}).outputText.replace(/from "([^"]+)"/g, (_, name) => `from ${JSON.stringify(name.startsWith("../lib/") ? new URL(name + ".ts", import.meta.url).href : import.meta.resolve(name))}`);
 const { default: AiMessage } = await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 test("reply renders fractions, Greek symbols, matrices and Markdown structure", () => {

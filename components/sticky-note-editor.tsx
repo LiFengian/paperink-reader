@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Eraser, ImagePlus, PenLine, Redo2, RotateCcw, StickyNote, Trash2, Undo2, X } from "lucide-react";
 import { InkMarks } from "./ink-marks";
 import { clamp } from "../lib/geometry";
 import { eraseMarks } from "../lib/eraser";
 import { readNoteImage } from "../lib/note-images";
+import { containsMath, recoverMathPaste } from "../lib/math-clipboard";
 import type { NoteImage, NoteMark, Point, Stroke } from "../lib/reader-types";
 
 type Props = {
@@ -19,9 +20,11 @@ type Props = {
   onActivity: () => void;
 };
 type Input = { pointer: number; points: Point[]; before: Stroke[]; after: Stroke[]; mode: "pen" | "eraser"; color: string; width: number; left: number; top: number; scale: number; painted: number };
+const NoteText = lazy(() => import("./ai-message"));
 
 export function StickyNoteEditor({ note, pageNumber, onChange, onResize, onClose, onDelete, onActivity }: Props) {
   const [tab, setTab] = useState<"ink" | "text">(note.text && !note.strokes.length ? "text" : "ink");
+  const [textMode, setTextMode] = useState<"edit" | "preview">(containsMath(note.text) ? "preview" : "edit");
   const [mode, setMode] = useState<"pen" | "eraser">("pen");
   const [color, setColor] = useState("#202a35");
   const [width, setWidth] = useState(2.5);
@@ -142,7 +145,15 @@ export function StickyNoteEditor({ note, pageNumber, onChange, onResize, onClose
       <div className="sticky-note-options"><button className="sticky-note-add-image" aria-label="插入便签图片" disabled={inserting} onClick={() => fileInput.current?.click()}><ImagePlus size={16} />{inserting ? "正在插入…" : "插入图片"}</button><label className="sticky-note-size"><span>标记大小</span><input type="range" aria-label="便签标记大小" min="50" max="200" step="10" value={Math.round(note.width / 28 * 100)} onChange={event => onResize(Number(event.target.value))} /><output>{Math.round(note.width / 28 * 100)}%</output></label><button className="sticky-note-reset-size" aria-label="恢复便签标记默认大小" title="恢复默认大小" onClick={() => onResize(100)}><RotateCcw size={15} /></button></div>
       {notice && <p className="sticky-note-notice" role="status">{notice}</p>}
       <div className="sticky-note-tabs" role="tablist" aria-label="便签记录方式"><button role="tab" aria-selected={tab === "ink"} aria-controls="sticky-note-ink" id="sticky-note-ink-tab" onClick={() => setTab("ink")}>手写</button><button role="tab" aria-selected={tab === "text"} aria-controls="sticky-note-text" id="sticky-note-text-tab" onClick={() => setTab("text")}>文字</button></div>
-      {tab === "text" ? <div role="tabpanel" id="sticky-note-text" aria-labelledby="sticky-note-text-tab"><textarea className="sticky-note-text" aria-label="便签文字" placeholder="记下你的理解、问题和想法…" value={note.text} onChange={event => onChange({ text: event.target.value })} /></div> : <div role="tabpanel" id="sticky-note-ink" aria-labelledby="sticky-note-ink-tab">
+      {tab === "text" ? <div role="tabpanel" id="sticky-note-text" aria-labelledby="sticky-note-text-tab"><div className="sticky-note-text-mode"><button aria-pressed={textMode === "edit"} onClick={() => setTextMode("edit")}>编辑</button><button aria-pressed={textMode === "preview"} disabled={!note.text.trim()} onClick={() => setTextMode("preview")}>排版阅读</button></div>{textMode === "preview" ? <div className="sticky-note-text-preview"><Suspense fallback={<p>{note.text}</p>}><NoteText content={note.text} copyable={false} /></Suspense></div> : <textarea className="sticky-note-text" aria-label="便签文字" placeholder="记下你的理解、问题和想法…" value={note.text} onChange={event => onChange({ text: event.target.value })} onPaste={event => {
+        const pasted = recoverMathPaste(event.clipboardData.getData("text/plain"), event.clipboardData.getData("text/html"));
+        if (!containsMath(pasted)) return;
+        event.preventDefault();
+        const field = event.currentTarget, text = latestNote.current.text;
+        const before = text.slice(0, field.selectionStart), after = text.slice(field.selectionEnd), block = pasted.includes("\n");
+        onChange({ text: before + (block && before && !before.endsWith("\n") ? "\n\n" : "") + pasted + (block && after && !after.startsWith("\n") ? "\n\n" : "") + after });
+        setTextMode("preview");
+      }} />}</div> : <div role="tabpanel" id="sticky-note-ink" aria-labelledby="sticky-note-ink-tab">
         <div className="sticky-note-tools"><button aria-label="便签钢笔" className={mode === "pen" ? "active" : ""} onClick={() => setMode("pen")}><PenLine size={18} /></button><button aria-label="便签橡皮" className={mode === "eraser" ? "active" : ""} onClick={() => setMode("eraser")}><Eraser size={18} /></button><span className="sticky-note-tool-divider" />{["#202a35", "#d4654f", "#4c79bb"].map(value => <button key={value} aria-label={`便签颜色 ${value}`} className={`sticky-note-color ${color === value ? "active" : ""}`} style={{ background: value }} onClick={() => { setColor(value); setMode("pen"); }} />)}<input aria-label="便签笔触粗细" type="range" min="1" max="6" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /><span className="sticky-note-tool-spacer" /><button aria-label="撤销便签笔迹" disabled={!history.length} onClick={undoInk}><Undo2 size={18} /></button><button aria-label="重做便签笔迹" disabled={!redo.length} onClick={redoInk}><Redo2 size={18} /></button></div>
         <div ref={surface} className="sticky-note-ink" style={{ aspectRatio: `${note.noteWidth} / ${note.noteHeight}` }}><canvas ref={live} className="sticky-note-live" /><svg aria-label="便签手写区域" viewBox={`0 0 ${note.noteWidth} ${note.noteHeight}`} onPointerDown={start} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}><InkMarks marks={preview || note.strokes} /></svg></div>
         <p className="sticky-note-pencil-hint">用 Apple Pencil 写画，手掌触碰不会移动便签。</p>
