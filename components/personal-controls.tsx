@@ -130,7 +130,7 @@ export function PersonalControls({ personal, current, disabled, onRestored, isWr
           {waiting && <button className="personal-action" disabled={working} onClick={() => void updateApp()}>保存笔记并更新阅读器</button>}
           <p className="storage-state">{storage}</p><button className="personal-action secondary" onClick={() => void persist()} disabled={working}>申请持久保存</button>
         </div>
-        <div className="personal-section"><h3>DeepSeek 设置</h3><p>Key 只保存在这台设备，不包含在备份中。发送问题时，全文文字、定位原文和标记截图会交给 DeepSeek。</p>
+        <div className="personal-section"><h3>DeepSeek 设置</h3><p>Key 只保存在这台设备，不包含在备份中。发送问题时，全文文字、定位原文和标记截图会交给 DeepSeek。开启 AI 输入框旁的“联网查询”后，使用同一个 Key 检索网页并附来源，会增加等待时间和 API 用量。</p>
           <label htmlFor="ai-model">模型</label><select id="ai-model" value={ai.model} disabled={working} onChange={event => { const next = { ...ai, model: event.target.value as AiSettings["model"] }; try { setAiSettings(next); setAi(next); } catch { setNotice("设置保存失败。"); } }}><option value="deepseek-flash">Flash · 兼顾速度与费用</option><option value="deepseek-v4-pro">Pro · 深度解读</option></select>
           <label htmlFor="ai-effort">思考深度</label><select id="ai-effort" value={ai.effort} disabled={working} onChange={event => { const next = { ...ai, effort: event.target.value as AiSettings["effort"] }; try { setAiSettings(next); setAi(next); } catch { setNotice("设置保存失败。"); } }}><option value="high">深度思考（默认）</option><option value="max">更深入思考</option><option value="none">快速回答</option></select>
           <p>Pro 费用更高；含图片时先由 Flash 转写，再交给 Pro。更深入思考会增加等待和 API 用量。</p>

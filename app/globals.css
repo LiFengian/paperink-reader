@@ -199,6 +199,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .composer-box>div span{font-size:9px;color:#a3aeac}
 .composer-box button{border:0;width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:#2d7065;color:#fff}
 .composer-actions{display:flex;align-items:center;gap:6px}
+.web-search-controls{display:flex;align-items:center;gap:8px;margin-bottom:8px;white-space:normal}.web-search-controls>button{display:flex;align-items:center;gap:5px;flex:none;border:1px solid #dbe3de;border-radius:7px;padding:6px 8px;background:#f5f7f5;color:#76857f;font-size:11px}.web-search-controls>button[aria-pressed=true]{border-color:#9dc4af;background:#eaf5ee;color:#2d7065}.web-search-controls>span{font-size:10px;line-height:1.5;color:#88988e}
 .composer-box .quick-translate{width:32px;height:32px;background:#e8f2eb;color:#2d7065;font-size:14px;font-weight:700}
 .composer-box .quick-translate:hover:not(:disabled){background:#d8eade}
 .status-toast{position:fixed;left:50%;bottom:68px;transform:translateX(-50%);z-index:30;background:#263e42;color:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(29,46,47,.2);display:flex;align-items:center;gap:15px;padding:10px 12px 10px 16px;font-size:12px;max-width:min(90vw,500px)}

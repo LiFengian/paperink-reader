@@ -69,6 +69,12 @@ pnpm build
 
 日常从主屏幕打开后，即使托管入口暂时无法访问，也能读 PDF、手写批注（书写时锁定页面、忽略手掌；移动请先选手掌工具）、套索整理、插入/删除页、插入图片和导出 PDF；会重新打开上次的文献。AI 画笔和聊天直接请求 `https://api.deepseek.com/chat/completions`，需要可访问 DeepSeek 的网络，按你的 API 账户计费，不经过 ChatGPT 或本站后端。
 
+### 联网查询
+
+AI 输入框旁的「联网查询」默认关闭，开启后会记住当前设备的选择。发送问题时，先通过 DeepSeek 官方 Anthropic 兼容接口检索网页，再把检索摘要、来源、文献全文及标记一起交给所选模型解答，回复末尾附实际检索来源链接。使用现有 DeepSeek Key，无需另外配置搜索服务或服务器；普通聊天仍使用原来的接口。
+
+联网查询需要网络，会增加等待时间和 DeepSeek API 用量；每次至多调用搜索工具 3 次。检索失败时保留提示词和标记，明确显示错误，不会自动当作检索成功继续回答。已保存的回答及来源可离线阅读、复制进便签并通过完整备份迁移。检索摘要不等于已读取网页全文。接口依据见 [DeepSeek 原生联网搜索说明](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/#using-web-search-in-claude-code)。
+
 首次下载和更新需要能访问安装入口。如果所在地网络无法打开 GitHub Pages，首次安装可能需要临时使用 VPN；下载完整后，日常阅读无需 VPN。缓存被清除后需要重新下载。代码可以部署到任意 HTTPS 静态托管，入口地址与 Service Worker 范围采用相对路径，支持子目录。
 
 ### 拖动、缩放和橡皮
