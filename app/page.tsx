@@ -124,6 +124,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   const liveInk = useRef<HTMLCanvasElement>(null);
   const liveIndex = useRef(0);
   const movePreview = useRef<SVGGElement>(null);
+  const selectionDismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInput = useRef(0);
   const previewFrame = useRef<number | null>(null);
   const [aiMarks, setAiMarks] = useState<AiMark[]>([]);
@@ -160,6 +161,11 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     const ids = new Set(selected); return { normal: all.filter(mark => !ids.has(mark.id)), selected: all.filter(mark => ids.has(mark.id)) };
   }, [page?.marks, selected]);
   const selectionBounds = useMemo(() => markBounds(markGroups.selected), [markGroups.selected]);
+  const clearSelectionDismiss = useCallback(() => {
+    if (selectionDismissTimer.current !== null) clearTimeout(selectionDismissTimer.current);
+    selectionDismissTimer.current = null;
+  }, []);
+  useEffect(() => clearSelectionDismiss, [doc?.id, page?.id, selected, clearSelectionDismiss]);
   const aiPageNumbers = doc?.pages.flatMap((item, index) => aiMarks.some(mark => mark.pageId === item.id) ? [index + 1] : []) || [];
 
   function refreshVisiblePdf() {
@@ -594,6 +600,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
         return;
       }
       if (tool === "lasso" && selectionBounds && point.x >= selectionBounds.x - 12 && point.x <= selectionBounds.x + selectionBounds.width + 12 && point.y >= selectionBounds.y - 12 && point.y <= selectionBounds.y + selectionBounds.height + 12) {
+        clearSelectionDismiss();
         gesture.current = { kind: "move", pointer: event.pointerId, start: point, before: page.marks, after: page.marks, pageId: page.id, dx: 0, dy: 0 };
       } else {
         if (tool === "lasso") setSelected([]);
@@ -699,6 +706,10 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     } else if (active.kind === "move" || active.kind === "erase") {
       updateDoc(current => ({ ...current, pages: current.pages.map(item => item.id === active.pageId ? { ...item, marks: active.after } : item) }));
       if (active.before !== active.after) { undoStack.current.push({ kind: "marks", pageId: active.pageId, before: active.before, after: active.after }); redoStack.current = []; }
+      if (active.kind === "move") {
+        clearSelectionDismiss();
+        selectionDismissTimer.current = setTimeout(() => { selectionDismissTimer.current = null; setSelected([]); }, 1000);
+      }
     }
   }
   async function sendMessage(quickPrompt?: string) {
