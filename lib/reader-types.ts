@@ -68,4 +68,8 @@ export type ReaderDocument = {
   chat: ChatMessage[];
 };
 
+export type LibraryFolder = { id: string; name: string; createdAt: number };
+export type LibraryOrganization = { folders: LibraryFolder[]; assignments: Record<string, string> };
+export type LibraryRestoreEntry = { document: ReaderDocument; pdf: Blob; folderId?: string };
+
 export type ToolName = "pan" | "pen" | "highlighter" | "eraser" | "lasso" | "ask" | "note";

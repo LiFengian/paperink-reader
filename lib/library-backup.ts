@@ -1,10 +1,10 @@
-import { getPdf, listDocuments, restoreDocuments, saveDocument } from "./local-store.ts";
+import { getPdf, listDocuments, listLibraryOrganization, restoreDocuments, saveDocument } from "./local-store.ts";
 import { PDFDocument } from "pdf-lib";
-import type { ReaderDocument } from "./reader-types";
+import type { ReaderDocument, LibraryFolder, LibraryRestoreEntry } from "./reader-types";
 
 const MAGIC = "PINKBK01";
 const encoder = new TextEncoder();
-type Entry = { document: ReaderDocument; bytes: number; sha256: string };
+type Entry = { document: ReaderDocument; bytes: number; sha256: string; folderId?: string };
 const hash = async (blob: Blob) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())), byte => byte.toString(16).padStart(2, "0")).join("");
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -54,21 +54,21 @@ export function validateBackupDocument(value: unknown): asserts value is ReaderD
 
 export async function createLibraryBackup(current?: ReaderDocument | null): Promise<Blob> {
   if (current) await saveDocument(current);
-  const documents = await listDocuments();
-  if (!documents.length) throw new Error("文献库为空，请先导入 PDF。");
+  const [documents, organization] = await Promise.all([listDocuments(), listLibraryOrganization()]);
+  if (!documents.length && !organization.folders.length) throw new Error("文献库为空，请先导入 PDF 或新建文件夹。");
   const entries: Entry[] = [], pdfs: Blob[] = [];
   for (const document of documents) {
     const pdf = await getPdf(document.id);
     if (!pdf) throw new Error(`“${document.name}”的原始 PDF 缺失，备份未完成。`);
-    entries.push({ document, bytes: pdf.size, sha256: await hash(pdf) }); pdfs.push(pdf);
+    entries.push({ document, bytes: pdf.size, sha256: await hash(pdf), ...(organization.assignments[document.id] ? { folderId: organization.assignments[document.id] } : {}) }); pdfs.push(pdf);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: "paperink-library", version: 1, createdAt: Date.now(), entries }));
+  const manifest = encoder.encode(JSON.stringify({ format: "paperink-library", version: 1, createdAt: Date.now(), entries, folders: organization.folders }));
   if (manifest.length > 64_000_000) throw new Error("笔记及聊天内容过大，请分批导出文献。");
   const length = new Uint8Array(4); new DataView(length.buffer).setUint32(0, manifest.length);
   return new Blob([encoder.encode(MAGIC), length, manifest, ...pdfs], { type: "application/octet-stream" });
 }
 
-export async function readLibraryBackup(file: Blob): Promise<{ document: ReaderDocument; pdf: Blob }[]> {
+export async function readLibraryBackupContents(file: Blob): Promise<{ entries: LibraryRestoreEntry[]; folders: LibraryFolder[] }> {
   if (file.size < 12 || file.size > 2_000_000_000) throw new Error("备份文件大小无效。");
   const header = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   if (new TextDecoder().decode(header.slice(0, 8)) !== MAGIC) throw new Error("请选择墨读导出的 .paperink 完整备份文件。");
@@ -76,12 +76,24 @@ export async function readLibraryBackup(file: Blob): Promise<{ document: ReaderD
   if (!length || length > 64_000_000 || 12 + length > file.size) throw new Error("备份文件损坏。");
   let manifest: unknown;
   try { manifest = JSON.parse(await file.slice(12, 12 + length).text()); } catch { throw new Error("备份文件损坏。"); }
-  if (!record(manifest) || manifest.format !== "paperink-library" || manifest.version !== 1 || !Array.isArray(manifest.entries) || !manifest.entries.length) throw new Error("备份版本不受支持或文献库为空。");
+  if (!record(manifest) || manifest.format !== "paperink-library" || manifest.version !== 1 || !Array.isArray(manifest.entries)) throw new Error("备份版本不受支持或文献库为空。");
+  const folderIds = new Map<string, string>(), folders: LibraryFolder[] = [];
+  if (manifest.folders !== undefined) {
+    if (!Array.isArray(manifest.folders)) throw new Error("备份中的文件夹数据无效。");
+    for (const folder of manifest.folders) {
+      if (!record(folder) || typeof folder.id !== "string" || !folder.id || folderIds.has(folder.id)
+        || typeof folder.name !== "string" || !folder.name.trim() || folder.name.length > 60 || !finite(folder.createdAt)) throw new Error("备份中的文件夹数据无效。");
+      const id = crypto.randomUUID(); folderIds.set(folder.id, id);
+      folders.push({ id, name: folder.name.trim(), createdAt: folder.createdAt });
+    }
+  }
+  if (!manifest.entries.length && !folders.length) throw new Error("备份版本不受支持或文献库为空。");
   let offset = 12 + length;
-  const entries: { document: ReaderDocument; pdf: Blob }[] = [];
+  const entries: LibraryRestoreEntry[] = [];
   for (const entry of manifest.entries) {
     if (!record(entry) || !Number.isSafeInteger(entry.bytes) || (entry.bytes as number) <= 0 || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error("备份文件损坏。");
     validateBackupDocument(entry.document);
+    if (entry.folderId !== undefined && (typeof entry.folderId !== "string" || !folderIds.has(entry.folderId))) throw new Error("备份中的文件夹归属无效。");
     const end = offset + (entry.bytes as number);
     if (end > file.size) throw new Error("备份文件不完整。");
     const pdf = file.slice(offset, end, "application/pdf"); offset = end;
@@ -91,15 +103,19 @@ export async function readLibraryBackup(file: Blob): Promise<{ document: ReaderD
     catch { throw new Error(`“${entry.document.name}”的 PDF 无法读取，原文献库未改动。`); }
     if (entry.document.pages.some(page => page.sourcePage !== null && page.sourcePage > pageCount)) throw new Error("备份的页面引用无效，原文献库未改动。");
     // Fresh document IDs allow repeat restores without overwriting local work.
-    entries.push({ document: { ...entry.document, id: crypto.randomUUID() }, pdf });
+    entries.push({ document: { ...entry.document, id: crypto.randomUUID() }, pdf, ...(typeof entry.folderId === "string" ? { folderId: folderIds.get(entry.folderId)! } : {}) });
   }
   if (offset !== file.size) throw new Error("备份包含无法识别的附加数据。");
-  return entries;
+  return { entries, folders };
+}
+
+export async function readLibraryBackup(file: Blob): Promise<LibraryRestoreEntry[]> {
+  return (await readLibraryBackupContents(file)).entries;
 }
 
 export async function importLibraryBackup(file: Blob): Promise<number> {
-  const entries = await readLibraryBackup(file);
-  await restoreDocuments(entries);
+  const { entries, folders } = await readLibraryBackupContents(file);
+  await restoreDocuments(entries, folders);
   return entries.length;
 }
 

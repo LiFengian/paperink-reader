@@ -1,8 +1,9 @@
-import type { ReaderDocument, ReaderPage, Mark, ChatMessage, NoteImage } from "./reader-types";
+import type { ReaderDocument, ReaderPage, Mark, ChatMessage, NoteImage, LibraryFolder, LibraryOrganization, LibraryRestoreEntry } from "./reader-types";
 
-const DB_NAME = "paperink-local-v1", DB_VERSION = 3;
+const DB_NAME = "paperink-local-v1", DB_VERSION = 4;
 const META = "document-meta", PAGES = "page-meta", MARKS = "mark-deltas", CHATS = "chat-deltas";
 const IMAGES = "note-images";
+const FOLDERS = "library-folders", ASSIGNMENTS = "document-folders";
 const snapshots = new Map<string, { ref: WeakRef<ReaderDocument>; revision?: string }>();
 const pending = new Map<string, Promise<IDBValidKey>>();
 let connection: Promise<IDBDatabase> | null = null;
@@ -25,6 +26,8 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(MARKS)) db.createObjectStore(MARKS, { keyPath: ["documentId", "pageId", "id"] }).createIndex("documentId", "documentId");
       if (!db.objectStoreNames.contains(CHATS)) db.createObjectStore(CHATS);
       if (!db.objectStoreNames.contains(IMAGES)) db.createObjectStore(IMAGES, { keyPath: ["documentId", "pageId", "noteId", "id"] }).createIndex("documentId", "documentId");
+      if (!db.objectStoreNames.contains(FOLDERS)) db.createObjectStore(FOLDERS, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(ASSIGNMENTS)) db.createObjectStore(ASSIGNMENTS, { keyPath: "documentId" }).createIndex("folderId", "folderId");
       // Legacy documents remain untouched. Small deltas override them on read.
     };
     request.onsuccess = () => {
@@ -150,9 +153,9 @@ export async function savePdf(id: string, file: Blob): Promise<IDBValidKey> {
   transaction.objectStore("pdfs").put(file, id); await done; return id;
 }
 // New imports must save their PDF and page metadata together, or leave no records.
-export async function saveImportedPdf(document: ReaderDocument, file: Blob): Promise<void> {
+export async function saveImportedPdf(document: ReaderDocument, file: Blob, folderId?: string): Promise<void> {
   if (document.pages.some(page => page.marks.length) || document.chat.length) throw new Error("新导入的 PDF 不应包含已有笔记。");
-  const db = await openDatabase(), transaction = db.transaction(["pdfs", META, PAGES, CHATS], "readwrite"), done = complete(transaction);
+  const db = await openDatabase(), transaction = db.transaction(["pdfs", META, PAGES, CHATS, FOLDERS, ASSIGNMENTS], "readwrite"), done = complete(transaction);
   const revision = crypto.randomUUID();
   try {
     const { pages, chat, ...attributes } = document;
@@ -160,6 +163,7 @@ export async function saveImportedPdf(document: ReaderDocument, file: Blob): Pro
     transaction.objectStore(META).add({ ...attributes, pageIds: pages.map(page => page.id), revision });
     for (const { marks: _marks, ...page } of pages) transaction.objectStore(PAGES).add({ ...page, documentId: document.id, markIds: [] });
     transaction.objectStore(CHATS).add(chat, document.id);
+    if (folderId) assignFolder(transaction, document.id, folderId);
   } catch (error) { transaction.abort(); await done.catch(() => {}); throw error; }
   await done; remember(document, revision);
 }
@@ -169,8 +173,8 @@ export async function getPdf(id: string): Promise<Blob | undefined> {
 }
 export async function deleteDocument(id: string): Promise<void> {
   await pending.get(id)?.catch(() => {});
-  const db = await openDatabase(), transaction = db.transaction(["documents", "pdfs", META, PAGES, MARKS, CHATS, IMAGES], "readwrite"), done = complete(transaction);
-  for (const name of ["documents", "pdfs", META, CHATS]) transaction.objectStore(name).delete(id);
+  const db = await openDatabase(), transaction = db.transaction(["documents", "pdfs", META, PAGES, MARKS, CHATS, IMAGES, ASSIGNMENTS], "readwrite"), done = complete(transaction);
+  for (const name of ["documents", "pdfs", META, CHATS, ASSIGNMENTS]) transaction.objectStore(name).delete(id);
   for (const name of [PAGES, MARKS, IMAGES]) {
     const store = transaction.objectStore(name), request = store.index("documentId").openKeyCursor(IDBKeyRange.only(id));
     request.onsuccess = () => { const cursor = request.result; if (cursor) { store.delete(cursor.primaryKey); cursor.continue(); } };
@@ -178,9 +182,86 @@ export async function deleteDocument(id: string): Promise<void> {
   await done; snapshots.delete(id);
 }
 // A single transaction preserves the existing library if any restore write fails.
-export async function restoreDocuments(entries: { document: ReaderDocument; pdf: Blob }[]): Promise<void> {
-  const db = await openDatabase(), transaction = db.transaction(["documents", "pdfs"], "readwrite"), done = complete(transaction);
-  try { for (const entry of entries) { transaction.objectStore("documents").add(entry.document); transaction.objectStore("pdfs").add(entry.pdf, entry.document.id); } }
+export async function restoreDocuments(entries: LibraryRestoreEntry[], folders: LibraryFolder[] = []): Promise<void> {
+  const folderIds = new Set(folders.map(folder => folder.id));
+  if (folderIds.size !== folders.length || entries.some(entry => entry.folderId && !folderIds.has(entry.folderId))) throw new Error("备份中的文件夹归属无效。");
+  const db = await openDatabase(), transaction = db.transaction(["documents", "pdfs", FOLDERS, ASSIGNMENTS], "readwrite"), done = complete(transaction);
+  try {
+    for (const entry of entries) {
+      transaction.objectStore("documents").add(entry.document); transaction.objectStore("pdfs").add(entry.pdf, entry.document.id);
+      if (entry.folderId) transaction.objectStore(ASSIGNMENTS).add({ documentId: entry.document.id, folderId: entry.folderId });
+    }
+    const request = transaction.objectStore(FOLDERS).getAll();
+    request.onsuccess = () => {
+      const names = new Set((request.result as LibraryFolder[]).map(folder => folderNameKey(folder.name)));
+      for (const folder of folders) {
+        let name = folder.name, suffix = 1;
+        while (names.has(folderNameKey(name))) name = `${folder.name.slice(0, 46)}（恢复 ${suffix++}）`;
+        names.add(folderNameKey(name)); transaction.objectStore(FOLDERS).add({ ...folder, name });
+      }
+    };
+  }
   catch (error) { transaction.abort(); await done.catch(() => {}); throw error; }
   await done; for (const entry of entries) remember(entry.document);
+}
+
+// Folder membership is separate from document snapshots: a late ink/chat save
+// cannot undo a move, and moving never rewrites PDF bytes, photos or strokes.
+const folderNameKey = (name: string) => name.normalize("NFKC").toLowerCase();
+function folderName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 60) throw new Error("文件夹名称请输入 1–60 个字符。");
+  return trimmed;
+}
+export async function listLibraryOrganization(): Promise<LibraryOrganization> {
+  const db = await openDatabase(), tx = db.transaction([FOLDERS, ASSIGNMENTS], "readonly"), done = complete(tx);
+  const [folders, memberships] = await Promise.all([
+    value<LibraryFolder[]>(tx.objectStore(FOLDERS).getAll()),
+    value<{ documentId: string; folderId: string }[]>(tx.objectStore(ASSIGNMENTS).getAll()),
+  ]);
+  await done;
+  const ids = new Set(folders.map(folder => folder.id));
+  return { folders: folders.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)), assignments: Object.fromEntries(memberships.filter(item => ids.has(item.folderId)).map(item => [item.documentId, item.folderId])) };
+}
+async function writeFolder(name: string, id?: string): Promise<LibraryFolder> {
+  name = folderName(name);
+  const db = await openDatabase(), tx = db.transaction(FOLDERS, "readwrite"), done = complete(tx);
+  let result: LibraryFolder, problem: Error | undefined;
+  const request = tx.objectStore(FOLDERS).getAll();
+  request.onsuccess = () => {
+    const folders = request.result as LibraryFolder[], previous = folders.find(folder => folder.id === id);
+    if (id && !previous) problem = new Error("文件夹已不存在，请重新选择。");
+    else if (folders.some(folder => folder.id !== id && folderNameKey(folder.name) === folderNameKey(name))) problem = new Error("已有同名文件夹，请换一个名称。");
+    if (problem) { tx.abort(); return; }
+    result = { id: id || crypto.randomUUID(), name, createdAt: previous?.createdAt ?? Date.now() };
+    tx.objectStore(FOLDERS).put(result);
+  };
+  await done.catch(error => { throw problem || error; }); return result!;
+}
+export const createLibraryFolder = (name: string) => writeFolder(name);
+export const renameLibraryFolder = (id: string, name: string) => writeFolder(name, id);
+export async function deleteLibraryFolder(id: string): Promise<void> {
+  const db = await openDatabase(), tx = db.transaction([FOLDERS, ASSIGNMENTS], "readwrite"), done = complete(tx);
+  tx.objectStore(FOLDERS).delete(id);
+  const request = tx.objectStore(ASSIGNMENTS).index("folderId").openKeyCursor(IDBKeyRange.only(id));
+  request.onsuccess = () => { const cursor = request.result; if (cursor) { tx.objectStore(ASSIGNMENTS).delete(cursor.primaryKey); cursor.continue(); } };
+  await done;
+}
+function assignFolder(tx: IDBTransaction, documentId: string, folderId: string) {
+  const request = tx.objectStore(FOLDERS).get(folderId);
+  request.onsuccess = () => {
+    if (!request.result) { tx.abort(); return; }
+    tx.objectStore(ASSIGNMENTS).put({ documentId, folderId });
+  };
+}
+export async function moveDocumentToFolder(documentId: string, folderId: string | null): Promise<void> {
+  const db = await openDatabase(), tx = db.transaction(["documents", META, FOLDERS, ASSIGNMENTS], "readwrite"), done = complete(tx);
+  const move = () => { if (folderId) assignFolder(tx, documentId, folderId); else tx.objectStore(ASSIGNMENTS).delete(documentId); };
+  const request = tx.objectStore(META).get(documentId);
+  request.onsuccess = () => {
+    if (request.result) { move(); return; }
+    const legacy = tx.objectStore("documents").get(documentId);
+    legacy.onsuccess = () => { if (legacy.result) move(); else tx.abort(); };
+  };
+  await done.catch(error => { throw error?.name === "AbortError" ? new Error("文献或文件夹已不存在，请刷新文献库后重试。") : error; });
 }

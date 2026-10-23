@@ -139,7 +139,7 @@ export function PersonalControls({ personal, current, disabled, onRestored, isWr
           <button className="personal-action secondary" disabled={working} onClick={() => { try { setPersonalKey(""); setKey(""); setNotice("本机 Key 已移除。"); } catch { setNotice("无法移除 Key，请检查存储设置。"); } }}>移除 Key</button></div>
         </div>
       </>}
-      <div className="personal-section"><h3>完整文献库备份</h3><p>包含原始 PDF、可编辑笔迹、图片、页面调整和聊天记录。可用于迁入离线版，也可换设备恢复；恢复时保留现有文献。</p>
+      <div className="personal-section"><h3>完整文献库备份</h3><p>包含文件夹分类、原始 PDF、可编辑笔迹、图片、页面调整和聊天记录。可用于迁入离线版，也可换设备恢复；恢复时保留现有文献。</p>
         <div className="personal-actions"><button className="personal-action" disabled={working} onClick={() => void makeBackup()}>生成完整备份</button><button className="personal-action secondary" disabled={working} onClick={() => restoreInput.current?.click()}>恢复备份</button></div>
         {backup && <button className="personal-action save-backup" onClick={() => void shareBackup(backup).catch(() => setNotice("保存失败，请重新尝试。"))}><Download size={16} />保存或分享备份</button>}
         <input className="hidden-input" ref={restoreInput} aria-label="恢复完整备份" type="file" accept=".paperink,application/octet-stream" onChange={event => { const file = event.target.files?.[0]; if (file) void restore(file); }} />
