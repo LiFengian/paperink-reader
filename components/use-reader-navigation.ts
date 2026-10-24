@@ -4,12 +4,15 @@ import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 
 type Position = { x: number; y: number };
 type Anchor = { source: Position; client: Position; local: Position; startZoom: number };
-type Options = { enabled: boolean; identity?: string; workspace: RefObject<HTMLDivElement | null>; canvas: RefObject<HTMLCanvasElement | null>; scale: number; fit: number; zoom: number; setZoom: (zoom: number) => void; settled: () => void };
+type SurfaceEvent = ReactPointerEvent<SVGSVGElement | HTMLDivElement>;
+type Options = { enabled: boolean; blocked?: () => boolean; identity?: string; workspace: RefObject<HTMLDivElement | null>; canvas: RefObject<HTMLCanvasElement | null>; scale: number; fit: number; zoom: number; setZoom: (zoom: number) => void; settled: () => void };
+const isPalm = (event: { pointerType: string; width: number; height: number }) => event.pointerType === "touch" && Math.max(event.width, event.height) >= 36;
 
 export function useReaderNavigation(options: Options) {
   const current = useRef(options); current.current = options;
   const fingers = useRef(new Map<number, Position>());
-  const pan = useRef<{ pointer: number; last: Position; time: number; vx: number; vy: number } | null>(null);
+  const pan = useRef<{ pointer: number; origin: Position; last: Position; time: number; vx: number; vy: number; dragging: boolean } | null>(null);
+  const inputType = useRef<string | null>(null);
   const pinch = useRef<{ distance: number; anchor: Anchor; target: number } | null>(null);
   const frame = useRef<number | null>(null), timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingZoom = useRef<{ anchor: Anchor; target: number } | null>(null);
@@ -51,23 +54,36 @@ export function useReaderNavigation(options: Options) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { timer.current = null; pendingZoom.current = null; commit(a, target); }, 160);
   }
-  function start(event: ReactPointerEvent<SVGSVGElement>): boolean {
-    if (!current.current.enabled || !current.current.workspace.current) return false;
+  function interrupt(commitPreview = true) {
+    stopMomentum();
+    const pending = pendingZoom.current, activePinch = pinch.current, values = [...fingers.current.values()];
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null; pendingZoom.current = null; pinch.current = null;
+    fingers.current.clear(); pan.current = null; inputType.current = null;
+    if (commitPreview && activePinch && values.length === 2) commit(activePinch.anchor, activePinch.target, midpoint(values[0], values[1]));
+    else if (commitPreview && pending) commit(pending.anchor, pending.target);
+    else { const paper = current.current.canvas.current?.parentElement; if (paper) { paper.style.transform = ""; paper.style.transition = ""; } }
+  }
+  const allowsTouch = (event: SurfaceEvent) => !current.current.blocked?.() && !isPalm(event);
+  function start(event: SurfaceEvent): boolean {
+    if (!current.current.workspace.current || (event.pointerType !== "touch" && !current.current.enabled)) return false;
+    if (event.pointerType === "touch" && !allowsTouch(event)) { event.preventDefault(); return true; }
     if (event.pointerType === "mouse" && event.button !== 0) return true;
     event.preventDefault(); stopMomentum();
     if (pendingZoom.current) { const pending = pendingZoom.current; if (timer.current) clearTimeout(timer.current); pendingZoom.current = null; commit(pending.anchor, pending.target); }
-    if (fingers.current.has(event.pointerId) || fingers.current.size >= 2 || (event.pointerType !== "touch" && fingers.current.size)) return true;
+    if (fingers.current.has(event.pointerId) || fingers.current.size >= 2 || (inputType.current && inputType.current !== event.pointerType)) return true;
+    inputType.current = event.pointerType;
     fingers.current.set(event.pointerId, position(event));
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Synthetic input or an ended pointer. */ }
     if (fingers.current.size === 2 && event.pointerType === "touch") {
       const [a, b] = [...fingers.current.values()], focus = midpoint(a, b), initial = anchor(focus);
       if (initial) { pinch.current = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), anchor: initial, target: initial.startZoom }; pan.current = null; }
-    } else pan.current = { pointer: event.pointerId, last: position(event), time: performance.now(), vx: 0, vy: 0 };
+    } else pan.current = { pointer: event.pointerId, origin: position(event), last: position(event), time: performance.now(), vx: 0, vy: 0, dragging: false };
     return true;
   }
-  function move(event: ReactPointerEvent<SVGSVGElement>): boolean {
-    if (!current.current.enabled) return false;
+  function move(event: SurfaceEvent): boolean {
     if (!fingers.current.has(event.pointerId)) return false;
+    if (event.pointerType === "touch" && !allowsTouch(event)) { event.preventDefault(); interrupt(false); return true; }
     event.preventDefault(); fingers.current.set(event.pointerId, position(event));
     if (pinch.current && fingers.current.size === 2) {
       const [a, b] = [...fingers.current.values()], focus = midpoint(a, b), state = pinch.current;
@@ -76,6 +92,8 @@ export function useReaderNavigation(options: Options) {
     }
     const state = pan.current, viewport = current.current.workspace.current;
     if (state?.pointer === event.pointerId && viewport) {
+      if (!state.dragging && Math.hypot(event.clientX - state.origin.x, event.clientY - state.origin.y) < 6) return true;
+      state.dragging = true;
       const now = performance.now(), dt = Math.max(8, now - state.time), dx = state.last.x - event.clientX, dy = state.last.y - event.clientY;
       viewport.scrollLeft += dx; viewport.scrollTop += dy;
       state.vx = state.vx * 0.3 + Math.max(-3, Math.min(3, dx / dt)) * 0.7;
@@ -84,8 +102,7 @@ export function useReaderNavigation(options: Options) {
     }
     return true;
   }
-  function end(event: ReactPointerEvent<SVGSVGElement>): boolean {
-    if (!current.current.enabled) return false;
+  function end(event: SurfaceEvent): boolean {
     if (!fingers.current.has(event.pointerId)) return false;
     event.preventDefault();
     if (pinch.current) {
@@ -93,12 +110,13 @@ export function useReaderNavigation(options: Options) {
       pinch.current = null; commit(state.anchor, state.target, focus);
       fingers.current.delete(event.pointerId);
       const remaining = [...fingers.current.entries()][0];
-      pan.current = remaining ? { pointer: remaining[0], last: remaining[1], time: performance.now(), vx: 0, vy: 0 } : null;
+      pan.current = remaining ? { pointer: remaining[0], origin: remaining[1], last: remaining[1], time: performance.now(), vx: 0, vy: 0, dragging: false } : null;
       return true;
     }
     fingers.current.delete(event.pointerId);
+    if (!fingers.current.size) inputType.current = null;
     const state = pan.current; pan.current = null;
-    if (!state || event.type === "pointercancel" || event.type === "lostpointercapture" || performance.now() - state.time > 100) { current.current.settled(); return true; }
+    if (!state?.dragging || event.type === "pointercancel" || event.type === "lostpointercapture" || performance.now() - state.time > 100) { current.current.settled(); return true; }
     let vx = state.vx, vy = state.vy, last = performance.now(), elapsed = 0;
     const step = (time: number) => {
       const viewport = current.current.workspace.current;
@@ -116,11 +134,8 @@ export function useReaderNavigation(options: Options) {
     return true;
   }
   useEffect(() => {
-    stopMomentum(); fingers.current.clear(); pan.current = null; pinch.current = null;
-    return () => {
-      stopMomentum(); if (timer.current) clearTimeout(timer.current); timer.current = null; pendingZoom.current = null;
-      const paper = current.current.canvas.current?.parentElement; if (paper) { paper.style.transform = ""; paper.style.transition = ""; }
-    };
+    interrupt(false);
+    return () => interrupt(false);
   }, [options.identity, options.enabled]);
-  return { start, move, end, zoomBy, stop: stopMomentum };
+  return { start, move, end, zoomBy, stop: stopMomentum, interrupt, allowsTouch };
 }
