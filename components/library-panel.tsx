@@ -3,10 +3,10 @@
 import { useMemo, useRef, useState } from "react";
 import { BookOpen, Check, Folder, FolderInput, FolderOpen, FolderPlus, Inbox, Pencil, Plus, Trash2, X } from "lucide-react";
 import { createLibraryFolder, deleteLibraryFolder, listLibraryOrganization, moveDocumentToFolder, renameLibraryFolder } from "../lib/local-store";
-import type { LibraryOrganization, ReaderDocument } from "../lib/reader-types";
+import type { LibraryOrganization, LibraryDocument } from "../lib/reader-types";
 
 type Props = {
-  documents: ReaderDocument[];
+  documents: LibraryDocument[];
   organization: LibraryOrganization;
   currentId?: string;
   filter: string;
@@ -14,7 +14,7 @@ type Props = {
   onFilter: (id: string) => void;
   onOrganization: (organization: LibraryOrganization) => void;
   onImport: () => void;
-  onOpen: (document: ReaderDocument) => void;
+  onOpen: (document: LibraryDocument) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
   onMessage: (message: string) => void;
@@ -88,7 +88,7 @@ export function LibraryPanel({ documents, organization, currentId, filter, disab
     <div className="library-caption"><strong>{activeFolder?.name || (filter === "unfiled" ? "未分类" : "最近阅读")}</strong><span>{visible.length}</span></div>
     <div className="library-list">{visible.length ? visible.map(item => <div className={`library-item ${currentId === item.id ? "selected" : ""}`} key={item.id}>
       <div className="library-item-main">
-        <button className="library-open" disabled={locked} onClick={() => onOpen(item)}><span className="book-thumb"><BookOpen size={21} /></span><span className="book-info"><strong title={item.name}>{item.name}</strong><small>{item.pages.length} 页 · {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small>{filter === "all" && <small className="book-folder">{folders.find(folder => folder.id === assignments[item.id])?.name || "未分类"}</small>}</span></button>
+        <button className="library-open" disabled={locked} onClick={() => onOpen(item)}><span className="book-thumb"><BookOpen size={21} /></span><span className="book-info"><strong title={item.name}>{item.name}</strong><small>{item.pageCount} 页 · {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small>{filter === "all" && <small className="book-folder">{folders.find(folder => folder.id === assignments[item.id])?.name || "未分类"}</small>}</span></button>
         <button className="move-document" title="移动文献及对话" aria-label={`移动 ${item.name}`} disabled={locked} onClick={() => { setMoving({ id: item.id, folderId: membership(item.id) }); setError(""); }}><FolderInput size={16} /></button>
         <button className="delete-small" title="删除文献" aria-label={`删除 ${item.name}`} disabled={locked} onClick={() => onDelete(item.id)}><Trash2 size={15} /></button>
       </div>

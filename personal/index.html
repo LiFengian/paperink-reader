@@ -12,6 +12,17 @@
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <title>墨读 · 个人离线版</title>
+  <style>
+    #reader-startup{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;background:#f7f9f6;color:#36584e;font-family:system-ui,-apple-system,sans-serif}
+    #reader-startup[hidden]{display:none}#reader-startup>div{width:100%;max-width:420px;background:white;border:1px solid #dce8df;border-radius:18px;padding:26px;box-sizing:border-box}
+    #reader-startup h1{font-size:24px;margin:0 0 18px}#reader-startup h2{font-size:18px;margin:0 0 10px}#reader-startup p{font-size:14px;line-height:1.8;margin:9px 0}#reader-startup small{display:block;color:#819087;font-size:12px;line-height:1.7;margin-top:18px}
+    #reader-startup-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}#reader-startup-actions[hidden]{display:none}#reader-startup button{border:1px solid #c9ded1;background:#eff6f0;color:#36584e;border-radius:8px;padding:12px 14px;font:inherit;font-size:14px}#reader-repair{background:#2d7065!important;color:white!important}#reader-startup button:disabled{opacity:.55}
+  </style>
 </head>
-<body><div id="root"></div><noscript>请启用 JavaScript 后打开墨读。</noscript><script type="module" src="./main.tsx"></script></body>
+<body>
+  <section id="reader-startup" role="status"><div><h1>墨读<span style="color:#7b9b88">.</span></h1><h2 id="reader-startup-title">正在打开墨读…</h2><p id="reader-startup-notice">正在准备阅读器，文献和笔记保存在这台设备。</p><div id="reader-startup-actions" hidden><button id="reader-repair" type="button">联网修复并重开</button><button id="reader-library" type="button">返回文献库</button><button id="reader-retry" type="button">重新打开</button></div><small>恢复操作不会删除 PDF、笔记、聊天记录或 Key。请勿清除网站数据或删除主屏幕图标。</small></div></section>
+  <div id="root"></div><noscript>请启用 JavaScript 后打开墨读。</noscript>
+  <script>/* __PAPERINK_BOOT__ */</script>
+  <script type="module" src="./main.tsx"></script>
+</body>
 </html>

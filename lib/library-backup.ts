@@ -1,5 +1,4 @@
 import { getPdf, listDocuments, listLibraryOrganization, restoreDocuments, saveDocument } from "./local-store.ts";
-import { PDFDocument } from "pdf-lib";
 import type { ReaderDocument, LibraryFolder, LibraryRestoreEntry } from "./reader-types";
 
 const MAGIC = "PINKBK01";
@@ -99,7 +98,7 @@ export async function readLibraryBackupContents(file: Blob): Promise<{ entries: 
     const pdf = file.slice(offset, end, "application/pdf"); offset = end;
     if (!(await pdf.slice(0, 1024).text()).includes("%PDF-") || await hash(pdf) !== entry.sha256) throw new Error(`“${entry.document.name}”的 PDF 校验失败，原文献库未改动。`);
     let pageCount: number;
-    try { pageCount = (await PDFDocument.load(await pdf.arrayBuffer(), { updateMetadata: false })).getPageCount(); }
+    try { const { PDFDocument } = await import("pdf-lib"); pageCount = (await PDFDocument.load(await pdf.arrayBuffer(), { updateMetadata: false })).getPageCount(); }
     catch { throw new Error(`“${entry.document.name}”的 PDF 无法读取，原文献库未改动。`); }
     if (entry.document.pages.some(page => page.sourcePage !== null && page.sourcePage > pageCount)) throw new Error("备份的页面引用无效，原文献库未改动。");
     // Fresh document IDs allow repeat restores without overwriting local work.

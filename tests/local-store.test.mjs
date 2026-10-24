@@ -109,6 +109,13 @@ for (const seedVersion of [1, 3]) test(`real IndexedDB v${seedVersion} upgrade: 
     const note = {id:'note',type:'note',x:100,y:100,width:28,height:28,text:'Image note',strokes:[],noteWidth:480,noteHeight:320,images:[image]};
     current = {...current,updatedAt:7,pages:[{...current.pages[0],marks:[kept,note]},current.pages[1]]};
     await store.saveDocument(current);
+    const reads=[], nativeGetAll=IDBObjectStore.prototype.getAll;
+    IDBObjectStore.prototype.getAll=function(...args){reads.push(this.name);return nativeGetAll.apply(this,args)};
+    const summary=(await store.listDocumentSummaries()).find(item=>item.id===current.id);
+    IDBObjectStore.prototype.getAll=nativeGetAll;
+    check(JSON.stringify(summary)===JSON.stringify(store.documentSummary(current)),'library summary omitted metadata');
+    check(!['mark-deltas','note-images','chat-deltas','page-meta'].some(name=>reads.includes(name)),'library startup hydrated every document photo, stroke or chat');
+    check(!('pages' in summary)&&!('chat' in summary),'library retained full document contents');
     writes.length=0;
     const resized = {...note,x:86,y:86,width:56,height:56,text:'Resized note with retained photo'};
     current = {...current,updatedAt:8,pages:[{...current.pages[0],marks:[kept,resized]},current.pages[1]]};

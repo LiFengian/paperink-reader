@@ -20,12 +20,12 @@ import { LibraryPanel } from "../components/library-panel";
 import { askAi } from "../lib/ai-client";
 import { getWebSearchEnabled, setWebSearchEnabled } from "../lib/web-search";
 import { pdfRaster } from "../lib/pdf-raster";
-import { createShareablePdf } from "../lib/export-pdf";
+import { beginDocumentOpen, finishDocumentOpen, lastDocumentToOpen } from "../lib/startup-state";
 import { createAiContext } from "../lib/ai-context";
 import { aiStrokeKind, identifyAiMark } from "../lib/ai-selection";
-import { deleteDocument, getPdf, listDocuments, listLibraryOrganization, saveDocument, saveImportedPdf } from "../lib/local-store";
+import { deleteDocument, documentSummary, getDocument, getPdf, listDocumentSummaries, listLibraryOrganization, saveDocument, saveImportedPdf } from "../lib/local-store";
 import { clamp, markBounds, markInPolygon, movedMark, pathFromPoints } from "../lib/geometry";
-import type { AiMark, AiSelection, ChatMessage, LibraryOrganization, Mark, NoteMark, Point, ReaderDocument, ReaderPage, Stroke, ToolName } from "../lib/reader-types";
+import type { AiMark, AiSelection, ChatMessage, LibraryDocument, LibraryOrganization, Mark, NoteMark, Point, ReaderDocument, ReaderPage, Stroke, ToolName } from "../lib/reader-types";
 
 type Gesture =
   | { kind: "note"; pointer: number; markId?: string; point: Point; x: number; y: number; scale: number; before: Mark[]; note?: NoteMark; moved?: NoteMark; marker: Element | null; dragging: boolean }
@@ -105,7 +105,7 @@ function AccessGate({ children }: { children: React.ReactNode }) {
 export default function Home() { return <AccessGate><Reader /></AccessGate>; }
 
 export function Reader({ personal = false }: { personal?: boolean } = {}) {
-  const [library, setLibrary] = useState<ReaderDocument[]>([]);
+  const [library, setLibrary] = useState<LibraryDocument[]>([]);
   const [organization, setOrganization] = useState<LibraryOrganization>({ folders: [], assignments: {} });
   const [libraryFilter, setLibraryFilter] = useState("all");
   const [libraryReady, setLibraryReady] = useState(false);
@@ -227,14 +227,21 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   }, [page?.id]);
 
   useEffect(() => {
-    Promise.all([listDocuments(), listLibraryOrganization()]).then(([items, grouping]) => {
+    let cancelled = false;
+    Promise.all([listDocumentSummaries(), listLibraryOrganization()]).then(async ([items, grouping]) => {
+      if (cancelled) return;
       setLibrary(items); setOrganization(grouping); setLibraryReady(true);
       if (personal) {
-        const lastId = localStorage.getItem("paperink-last-document");
-        const last = items.find(item => item.id === lastId);
-        if (last) { setDoc(last); setLibraryOpen(false); setLibraryFilter(grouping.assignments[last.id] || "all"); }
+        const last = lastDocumentToOpen();
+        if (last.interrupted) { setMessage("上次打开文献未完成，已返回文献库。原文件与笔记已保留，请重新选择文献。"); return; }
+        if (last.id && items.some(item => item.id === last.id)) {
+          beginDocumentOpen(last.id);
+          const opened = await getDocument(last.id);
+          if (!cancelled && opened) { setDoc(opened); setLibraryOpen(false); setLibraryFilter(grouping.assignments[opened.id] || "all"); }
+        }
       }
-    }).catch(() => setMessage("无法读取本地文献库。"));
+    }).catch(() => { if (!cancelled) setMessage("无法恢复上次文献。原文件与笔记已保留，请从文献库重新打开。"); });
+    return () => { cancelled = true; };
   }, [personal]);
   useEffect(() => {
     if (personal && doc) {
@@ -254,7 +261,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     if (!doc || gesture.current?.kind === "erase" || gesture.current?.kind === "move") return;
     let cancelled = false;
     saveDocument(doc).then(() => {
-      if (!cancelled) setLibrary(list => [doc, ...list.filter(item => item.id !== doc.id)].sort((a, b) => b.updatedAt - a.updatedAt));
+      if (!cancelled) setLibrary(list => [documentSummary(doc), ...list.filter(item => item.id !== doc.id)].sort((a, b) => b.updatedAt - a.updatedAt));
     }).catch(() => { if (!cancelled) setMessage("自动保存失败。请检查 iPad 存储空间并保存完整备份。"); });
     return () => { cancelled = true; };
   }, [doc]);
@@ -323,6 +330,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
         visible.style.width = target.style.width; visible.style.height = target.style.height;
         visible.style.left = target.style.left; visible.style.top = target.style.top;
         visible.getContext("2d")?.drawImage(target, 0, 0); visible.style.visibility = "visible";
+        if (personal && doc && (page.sourcePage === null || pdf)) finishDocumentOpen(doc.id);
       } finally { rendering = null; target.width = 1; target.height = 1; }
     })().catch(error => { if (!cancelled && error?.name !== "RenderingCancelledException") setMessage("这一页渲染失败。"); });
     return () => { cancelled = true; rendering?.cancel(); };
@@ -420,7 +428,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       stage = "save";
       await saveImportedPdf(next, new Blob([bytes], { type: "application/pdf" }), folderId);
       if (folderId) setOrganization(current => ({ ...current, assignments: { ...current.assignments, [next.id]: folderId } }));
-      setLibrary(items => [next, ...items]); setDoc(next); setZoom(1); setLibraryOpen(false);
+      setLibrary(items => [documentSummary(next), ...items]); setDoc(next); setZoom(1); setLibraryOpen(false);
       setMessage(`已导入 ${pages.length} 页${folderId ? "到当前文件夹" : ""}，文件保存在此设备。`);
     } catch (error) { console.error(`PDF import failed (${stage})`, error); setMessage(pdfImportErrorMessage(error, stage)); }
     finally { await task?.destroy().catch(() => {}); setBusy(false); if (pdfInput.current) pdfInput.current.value = ""; }
@@ -512,6 +520,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
     try {
       const source = await getPdf(doc.id);
       if (!source) throw new Error("missing pdf");
+      const { createShareablePdf } = await import("../lib/export-pdf");
       const bytes = await createShareablePdf(doc, source);
       const filename = doc.name.replace(/\.pdf$/i, "") + "-墨读批注.pdf";
       const file = new File([new Uint8Array(bytes)], filename, { type: "application/pdf" });
@@ -755,6 +764,17 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       if (added) updateDoc(current => current.id === documentId ? { ...current, chat: current.chat.filter(item => item.id !== user.id) } : current);
     } finally { sendingMessage.current = false; setBusy(false); }
   }
+  async function openLibraryDocument(id: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (personal) beginDocumentOpen(id);
+      const opened = await getDocument(id);
+      if (!opened) throw new Error("missing document");
+      setDoc(opened); setSelected([]); setLibraryOpen(false);
+    } catch { setMessage("这份文献暂时无法打开，原文件与笔记已保留，请先保存完整备份。"); }
+    finally { setBusy(false); }
+  }
   async function removeDoc(id: string) {
     if (!confirm("确定删除这份文献及全部本地笔记吗？")) return;
     await deleteDocument(id);
@@ -766,9 +786,9 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
   return <main className="app-shell">
     <input ref={pdfInput} className="hidden-input" type="file" accept="application/pdf,.pdf" onChange={event => { const file = event.target.files?.[0]; if (file) void importPdf(file); }} />
     <input ref={imageInput} className="hidden-input" type="file" accept="image/*" onChange={event => { const file = event.target.files?.[0]; if (file) void addImage(file); }} />
-    <header className="topbar"><div className="topbar-left"><button className="plain-icon" aria-label="打开文献库" onClick={() => setLibraryOpen(!libraryOpen)}><Menu size={21} /></button><div className="brand"><span className="brand-mark"><BookOpen size={21} /></span>墨读<span className="brand-dot">.</span></div><span className="topbar-divider" /><span className="document-title" title={doc?.name}>{doc?.name || "你的文献工作台"}</span></div><div className="topbar-right"><PersonalControls personal={personal} current={doc} disabled={busy} isWriting={() => !!gesture.current || !!activeNote} onUpdating={updating => { readerUpdating.current = updating; }} onRestored={async () => { const [items, grouping] = await Promise.all([listDocuments(), listLibraryOrganization()]); setDoc(null); setLibrary(items); setOrganization(grouping); setLibraryFilter("all"); setLibraryOpen(true); setSelected([]); setAiMarks([]); setAiRedoMarks([]); setPrompt(""); }} /><span className="local-pill"><i />本机保存</span><button className="header-button subtle" onClick={() => setHelp(true)}><CircleHelp size={17} /><span>使用说明</span></button><button className="header-button primary" disabled={!doc || busy} onClick={() => void exportPdf()}><ArrowDownToLine size={17} /><span>导出与分享</span></button></div></header>
+    <header className="topbar"><div className="topbar-left"><button className="plain-icon" aria-label="打开文献库" onClick={() => setLibraryOpen(!libraryOpen)}><Menu size={21} /></button><div className="brand"><span className="brand-mark"><BookOpen size={21} /></span>墨读<span className="brand-dot">.</span></div><span className="topbar-divider" /><span className="document-title" title={doc?.name}>{doc?.name || "你的文献工作台"}</span></div><div className="topbar-right"><PersonalControls personal={personal} current={doc} disabled={busy} isWriting={() => !!gesture.current || !!activeNote} onUpdating={updating => { readerUpdating.current = updating; }} onRestored={async () => { const [items, grouping] = await Promise.all([listDocumentSummaries(), listLibraryOrganization()]); setDoc(null); setLibrary(items); setOrganization(grouping); setLibraryFilter("all"); setLibraryOpen(true); setSelected([]); setAiMarks([]); setAiRedoMarks([]); setPrompt(""); }} /><span className="local-pill"><i />本机保存</span><button className="header-button subtle" onClick={() => setHelp(true)}><CircleHelp size={17} /><span>使用说明</span></button><button className="header-button primary" disabled={!doc || busy} onClick={() => void exportPdf()}><ArrowDownToLine size={17} /><span>导出与分享</span></button></div></header>
     <div className="app-body">
-      {libraryOpen && <LibraryPanel documents={library} organization={organization} currentId={doc?.id} filter={libraryFilter} disabled={busy || !libraryReady} onFilter={setLibraryFilter} onOrganization={setOrganization} onImport={() => pdfInput.current?.click()} onOpen={item => { setDoc(item); setSelected([]); setLibraryOpen(false); }} onDelete={id => void removeDoc(id)} onClose={() => setLibraryOpen(false)} onMessage={setMessage} />}
+      {libraryOpen && <LibraryPanel documents={library} organization={organization} currentId={doc?.id} filter={libraryFilter} disabled={busy || !libraryReady} onFilter={setLibraryFilter} onOrganization={setOrganization} onImport={() => pdfInput.current?.click()} onOpen={item => void openLibraryDocument(item.id)} onDelete={id => void removeDoc(id)} onClose={() => setLibraryOpen(false)} onMessage={setMessage} />}
       <section className="reader-area">{doc && page ? <>
         <div className="toolbar"><div className="tool-group"><ToolButton label="移动页面" active={tool === "pan"} onClick={() => setTool("pan")}><Hand size={19} /></ToolButton><ToolButton label="钢笔" active={tool === "pen"} onClick={() => setTool("pen")}><PenLine size={19} /></ToolButton><ToolButton label="荧光笔" active={tool === "highlighter"} onClick={() => setTool("highlighter")}><Highlighter size={19} /></ToolButton><ToolButton label="橡皮擦" active={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={19} /></ToolButton><ToolButton label="套索移动" active={tool === "lasso"} onClick={() => setTool("lasso")}><Lasso size={19} /></ToolButton><ToolButton label="插入便签" active={tool === "note"} onClick={() => { setTool("note"); setSelected([]); }}><StickyNote size={19} /></ToolButton><ToolButton label="AI 询问画笔" active={tool === "ask"} disabled={busy} onClick={() => { setTool("ask"); setSelected([]); if (window.innerWidth > 900) setChatOpen(true); else setChatOpen(false); }}><AiPenIcon /></ToolButton></div>{tool === "eraser" && <div className="eraser-options"><button aria-label="整笔擦除" className={eraserMode === "stroke" ? "selected" : ""} onClick={() => setEraserMode("stroke")}>整笔</button><button aria-label="局部擦除" className={eraserMode === "area" ? "selected" : ""} onClick={() => setEraserMode("area")}>局部</button><input aria-label="擦除大小" type="range" min="6" max="40" step="2" value={eraserSize} onChange={event => setEraserSize(Number(event.target.value))} /></div>}<span className="toolbar-divider" /><div className="color-group">{COLORS.map(paint => <button key={paint} className={`color-swatch ${color === paint ? "selected" : ""}`} style={{ background: paint }} aria-label={`颜色 ${paint}`} onClick={() => setColor(paint)} />)}</div><span className="toolbar-divider optional-divider" /><div className="size-group"><span>笔触</span><input aria-label="笔触粗细" type="range" min="1" max="7" step="0.5" value={width} onChange={event => setWidth(Number(event.target.value))} /></div><span className="toolbar-spacer" /><div className="tool-group utility"><ToolButton label="撤销" disabled={tool === "ask" && (busy || !aiMarks.length)} onClick={undo}><Undo2 size={18} /></ToolButton><ToolButton label="重做" disabled={tool === "ask" && (busy || !aiRedoMarks.length)} onClick={redo}><Redo2 size={18} /></ToolButton><ToolButton label="插入空白页" onClick={addBlankPage}><FilePlus2 size={18} /></ToolButton><ToolButton label="删除当前页" disabled={busy} onClick={deleteCurrentPage}><FileMinus2 size={18} /></ToolButton>{selected.length > 0 && <ToolButton label="删除选中对象" onClick={() => { setMarks(page.id, page.marks.filter(mark => !selected.includes(mark.id))); setSelected([]); }}><Trash2 size={18} /></ToolButton>}<ToolButton label="插入图片" onClick={() => imageInput.current?.click()}><ImagePlus size={18} /></ToolButton></div><button className={`chat-toggle ${chatOpen ? "on" : ""}`} onClick={() => setChatOpen(!chatOpen)}><MessageCircle size={18} /><span>AI 助读</span></button></div>
         <div className="reader-hint"><i /><span className="reader-hint-text">{tool === "note" ? "点击页面放置便签；轻点标记展开，按住拖动可移动" : tool === "ask" ? "划线、画圈均可连续标记；需移动页面请先选手掌工具" : tool === "lasso" ? "圈住笔迹、图片或便签标记后拖动；移动页面请选手掌工具" : tool === "pan" ? "拖动后惯性滑动；双指捏合缩放，松手后恢复高清" : tool === "eraser" ? eraserMode === "stroke" ? "点中或划过笔画，整笔擦除" : "按住拖动，只擦掉碰到的笔迹；可调橡皮大小" : "Apple Pencil 书写时页面锁定；移动页面请选手掌工具"}</span>{aiMarks.length > 0 && <button className="ai-question-ready" onClick={() => setChatOpen(true)}>{aiMarks.length} 处标记 · 输入提示词</button>}</div>

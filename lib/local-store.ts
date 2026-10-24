@@ -1,4 +1,4 @@
-import type { ReaderDocument, ReaderPage, Mark, ChatMessage, NoteImage, LibraryFolder, LibraryOrganization, LibraryRestoreEntry } from "./reader-types";
+import type { ReaderDocument, ReaderPage, Mark, ChatMessage, NoteImage, LibraryFolder, LibraryOrganization, LibraryRestoreEntry, LibraryDocument } from "./reader-types";
 
 const DB_NAME = "paperink-local-v1", DB_VERSION = 4;
 const META = "document-meta", PAGES = "page-meta", MARKS = "mark-deltas", CHATS = "chat-deltas";
@@ -103,6 +103,25 @@ export async function listDocuments(): Promise<ReaderDocument[]> {
   const overlaid = new Set(metadata.map(meta => meta.id));
   const result = new Map(legacy.map(document => [document.id, overlaid.has(document.id) ? document : remember(document)]));
   for (const meta of metadata) { const document = await getDocument(meta.id); if (document) result.set(meta.id, document); }
+  return [...result.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export const documentSummary = (document: ReaderDocument): LibraryDocument => ({
+  id: document.id, name: document.name, createdAt: document.createdAt, updatedAt: document.updatedAt, pageCount: document.pages.length,
+});
+
+// Opening the library must not hydrate every document's ink, chat and photos.
+export async function listDocumentSummaries(): Promise<LibraryDocument[]> {
+  const db = await openDatabase(), tx = db.transaction(["documents", META], "readonly"), done = complete(tx);
+  const result = new Map<string, LibraryDocument>();
+  const legacy = tx.objectStore("documents").openCursor();
+  legacy.onsuccess = () => {
+    const cursor = legacy.result;
+    if (cursor) { result.set(String(cursor.key), documentSummary(cursor.value)); cursor.continue(); }
+  };
+  const metadata = value<DocumentMeta[]>(tx.objectStore(META).getAll());
+  const entries = await metadata; await done;
+  for (const entry of entries) result.set(entry.id, { id: entry.id, name: entry.name, createdAt: entry.createdAt, updatedAt: entry.updatedAt, pageCount: entry.pageIds.length });
   return [...result.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 

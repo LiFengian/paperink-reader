@@ -68,6 +68,8 @@ export type ReaderDocument = {
   chat: ChatMessage[];
 };
 
+export type LibraryDocument = Pick<ReaderDocument, "id" | "name" | "createdAt" | "updatedAt"> & { pageCount: number };
+
 export type LibraryFolder = { id: string; name: string; createdAt: number };
 export type LibraryOrganization = { folders: LibraryFolder[]; assignments: Record<string, string> };
 export type LibraryRestoreEntry = { document: ReaderDocument; pdf: Blob; folderId?: string };

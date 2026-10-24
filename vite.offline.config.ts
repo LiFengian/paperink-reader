@@ -18,6 +18,12 @@ export default defineConfig({
   root: resolve(project, "personal"), base: "./", publicDir: resolve(project, "public"),
   plugins: [react(), {
     name: "paperink-offline-resources",
+    transformIndexHtml: {
+      order: "pre",
+      async handler(html) {
+        return html.replace("/* __PAPERINK_BOOT__ */", await readFile(resolve(project, "personal/boot-recovery.js"), "utf8"));
+      },
+    },
     async closeBundle() {
       await mkdir(join(output, "pdfjs"), { recursive: true });
       for (const name of ["cmaps", "standard_fonts", "wasm"]) await cp(resolve(project, `node_modules/pdfjs-dist/${name}`), join(output, "pdfjs", name), { recursive: true });
@@ -32,7 +38,8 @@ export default defineConfig({
       for (const path of paths) { digest.update(relative(output, path)); digest.update(await readFile(path)); }
       const resources = paths.map(path => `./${relative(output, path).replaceAll("\\", "/")}`);
       const template = await readFile(resolve(project, "personal/service-worker.js"), "utf8");
-      await writeFile(join(output, "sw.js"), template.replace("__CACHE_VERSION__", digest.digest("hex").slice(0, 20)).replace("__APP_VERSION__", version).replace("__PRECACHE_FILES__", JSON.stringify(resources)));
+      const recovery = (await readFile(join(output, "index.html"), "utf8")).replace(/<script\b[^>]*\bsrc="[^"]*"[^>]*><\/script>/g, "").replace(/<link\b[^>]*\brel="stylesheet"[^>]*>/g, "").replace("正在打开墨读…", "墨读暂时未能打开").replace("</body>", '<script>window.paperinkBoot.fail("阅读器资源暂时不可用，请联网修复。本机文献与笔记会保留。")</script></body>');
+      await writeFile(join(output, "sw.js"), template.replace("__CACHE_VERSION__", digest.digest("hex").slice(0, 20)).replace("__APP_VERSION__", version).replace("__PRECACHE_FILES__", JSON.stringify(resources)).replace("__RECOVERY_HTML__", () => JSON.stringify(recovery)));
     },
   }],
   build: { outDir: output, emptyOutDir: true, target: "es2022" },
