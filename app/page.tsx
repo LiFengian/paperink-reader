@@ -597,7 +597,7 @@ export function Reader({ personal = false }: { personal?: boolean } = {}) {
       previous.marker?.classList.remove("dragging"); gesture.current = null;
     }
     if (gesture.current) { event.preventDefault(); return; }
-    if (event.pointerType === "touch" && !navigation.allowsTouch(event)) { event.preventDefault(); return; }
+    if (event.pointerType === "touch" && !navigation.allowsTouch()) { event.preventDefault(); return; }
     if (event.pointerType !== "touch") navigation.interrupt();
     const inputScale = event.currentTarget.getBoundingClientRect().width / page.width;
     const marker = (event.target as Element).closest("[data-note-id]");

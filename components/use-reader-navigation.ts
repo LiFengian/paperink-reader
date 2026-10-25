@@ -6,7 +6,6 @@ type Position = { x: number; y: number };
 type Anchor = { source: Position; client: Position; local: Position; startZoom: number };
 type SurfaceEvent = ReactPointerEvent<SVGSVGElement | HTMLDivElement>;
 type Options = { enabled: boolean; blocked?: () => boolean; identity?: string; workspace: RefObject<HTMLDivElement | null>; canvas: RefObject<HTMLCanvasElement | null>; scale: number; fit: number; zoom: number; setZoom: (zoom: number) => void; settled: () => void };
-const isPalm = (event: { pointerType: string; width: number; height: number }) => event.pointerType === "touch" && Math.max(event.width, event.height) >= 36;
 
 export function useReaderNavigation(options: Options) {
   const current = useRef(options); current.current = options;
@@ -64,10 +63,13 @@ export function useReaderNavigation(options: Options) {
     else if (commitPreview && pending) commit(pending.anchor, pending.target);
     else { const paper = current.current.canvas.current?.parentElement; if (paper) { paper.style.transform = ""; paper.style.transition = ""; } }
   }
-  const allowsTouch = (event: SurfaceEvent) => !current.current.blocked?.() && !isPalm(event);
+  // A finger's reported contact size varies by device and changes as it presses
+  // down. It cannot reliably identify a palm. Pen priority is enforced by blocked
+  // and interrupt(), so rejected contacts stay inactive until their next down.
+  const allowsTouch = () => !current.current.blocked?.();
   function start(event: SurfaceEvent): boolean {
     if (!current.current.workspace.current || (event.pointerType !== "touch" && !current.current.enabled)) return false;
-    if (event.pointerType === "touch" && !allowsTouch(event)) { event.preventDefault(); return true; }
+    if (event.pointerType === "touch" && !allowsTouch()) { event.preventDefault(); return true; }
     if (event.pointerType === "mouse" && event.button !== 0) return true;
     event.preventDefault(); stopMomentum();
     if (pendingZoom.current) { const pending = pendingZoom.current; if (timer.current) clearTimeout(timer.current); pendingZoom.current = null; commit(pending.anchor, pending.target); }
@@ -83,7 +85,7 @@ export function useReaderNavigation(options: Options) {
   }
   function move(event: SurfaceEvent): boolean {
     if (!fingers.current.has(event.pointerId)) return false;
-    if (event.pointerType === "touch" && !allowsTouch(event)) { event.preventDefault(); interrupt(false); return true; }
+    if (event.pointerType === "touch" && !allowsTouch()) { event.preventDefault(); interrupt(false); return true; }
     event.preventDefault(); fingers.current.set(event.pointerId, position(event));
     if (pinch.current && fingers.current.size === 2) {
       const [a, b] = [...fingers.current.values()], focus = midpoint(a, b), state = pinch.current;
