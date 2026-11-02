@@ -157,6 +157,21 @@ pnpm preview:offline
 
 更新已有站点时，保留旧版本 `assets/` 中的散列文件，以免旧入口或仍在运行的窗口找不到启动脚本。可在构建后执行 `node scripts/retain-offline-assets.mjs 旧版离线包目录`，再上传完整目录；此脚本只补充旧静态资源，不覆盖新资源，不包含用户 PDF 或笔记。兼容资源无需加入新版离线预缓存。
 
+### 验证离线启动、更新与保存
+
+`pnpm test` 包含 Service Worker 分批预缓存失败回滚测试。`tests/browser/offline-lifecycle.mjs` 另用真实离线构建、Service Worker 和 IndexedDB 验证完整流程，并自动启动临时 localhost 子目录服务器；测试使用独立文献库，不访问个人数据或调用 AI。
+
+若本机已可导入 Playwright 且已安装 Chromium，可直接执行 `pnpm test:offline`。也可复用已有 Playwright 和 Chrome / Edge，无需修改项目依赖：
+
+```bash
+pnpm build:offline
+node tests/browser/offline-lifecycle.mjs --playwright=./path/to/playwright/index.mjs --executable="C:/path/to/msedge.exe"
+```
+
+覆盖清除 HTTP 缓存后的断网重开 PDF、首次离线加载历史 AI 公式、便签打开时阻止更新、IndexedDB 写入排队时禁止提前激活、保存最后一笔后更新重载、存储空间不足时阻止更新及恢复后重试，以及缓存丢失后的恢复按钮和返回文献库。前后核对 PDF 字节、批注、便签图片、聊天和 Key；测试缺少浏览器或构建产物时会失败，不会静默跳过。
+
+存储单元测试需要 Chromium / Chrome / Edge；可通过 `PAPERINK_TEST_BROWSER` 指定可执行文件。发布前应确认 `pnpm test` 中的两项 `real IndexedDB` 测试均执行成功，而非跳过。
+
 ### 验证笔和触摸导航
 
 `tests/browser/reader-input.mjs` 使用 Playwright 驱动 Chromium 实际输入事件（包含真实指针捕获），在独立浏览器上下文中创建测试文献，不访问个人文献。先构建并启动本地静态服务器，再指定本机 Playwright 模块和 Chromium/Edge 路径：

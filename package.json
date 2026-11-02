@@ -11,6 +11,7 @@
     "build": "node scripts/run-framework.mjs build",
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "test:offline": "npm run build:offline && node tests/browser/offline-lifecycle.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "build:offline": "vite build --config vite.offline.config.ts",

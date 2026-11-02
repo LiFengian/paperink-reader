@@ -5,22 +5,33 @@ import vm from "node:vm";
 
 const navigation = url => { const request = new Request(url); Object.defineProperty(request, "mode", { value: "navigate" }); return request; };
 const source = await readFile(new URL("../personal/service-worker.js", import.meta.url), "utf8");
-function worker(active = false) {
+function worker(active = false, { resources = ["./index.html", "./assets/new.js"], failBatch = 0 } = {}) {
   const scope = "https://example.org/paperink-reader/", prefix = "paperink-offline-" + encodeURIComponent(scope) + "-", name = prefix + "new";
-  const handlers = {}, stores = new Map(), fetched = [], deleted = [];
+  const handlers = {}, stores = new Map(), fetched = [], deleted = [], batches = [];
   const caches = {
     keys: async () => [...stores.keys()],
     delete: async key => { deleted.push(key); return stores.delete(key); },
-    open: async key => { if (!stores.has(key)) stores.set(key, new Map()); return { match: async request => stores.get(key).get(typeof request === "string" ? request : request.url || request.href)?.clone(), addAll: async () => {} }; },
+    open: async key => {
+      if (!stores.has(key)) stores.set(key, new Map());
+      return {
+        match: async request => stores.get(key).get(typeof request === "string" ? request : request.url || request.href)?.clone(),
+        addAll: async requests => {
+          batches.push(Array.from(requests, request => ({ url: request.url, cache: request.cache })));
+          if (batches.length === failBatch) throw Error("precache download failed");
+          for (const request of requests) stores.get(key).set(request.url, new Response("downloaded asset"));
+        },
+      };
+    },
   };
   let online = true, serverStatus = 200, activations = 0;
-  const self = { registration: { scope, active: active ? {} : null }, location: new URL(scope), clients: { claim: async () => {} }, skipWaiting: async () => { activations++; }, addEventListener: (name, callback) => { handlers[name] = callback; } };
-  vm.runInNewContext(source.replace("__CACHE_VERSION__", "new").replace("__APP_VERSION__", "0.6.1").replace("__PRECACHE_FILES__", JSON.stringify(["./index.html", "./assets/new.js"])).replace("__RECOVERY_HTML__", JSON.stringify("<h1>墨读恢复</h1>")), {
+  const activationSizes = [];
+  const self = { registration: { scope, active: active ? {} : null }, location: new URL(scope), clients: { claim: async () => {} }, skipWaiting: async () => { activations++; activationSizes.push(stores.get(name)?.size || 0); }, addEventListener: (name, callback) => { handlers[name] = callback; } };
+  vm.runInNewContext(source.replace("__CACHE_VERSION__", "new").replace("__APP_VERSION__", "0.6.1").replace("__PRECACHE_FILES__", JSON.stringify(resources)).replace("__RECOVERY_HTML__", JSON.stringify("<h1>墨读恢复</h1>")), {
     self, caches, URL, Request, Response, Set,
     fetch: async request => { fetched.push(request.url); if (!online) throw Error("offline"); return new Response("network", { status: serverStatus }); },
   });
   const event = async (type, fields = {}) => { let pending; handlers[type]({ ...fields, waitUntil: task => { pending = task; }, respondWith: task => { pending = task; } }); return pending; };
-  return { scope, prefix, name, stores, deleted, fetched, event, activations: () => activations, offline: () => { online = false; }, httpError: () => { serverStatus = 503; } };
+  return { scope, prefix, name, stores, deleted, fetched, batches, activationSizes, event, activations: () => activations, offline: () => { online = false; }, httpError: () => { serverStatus = 503; } };
 }
 
 test("cached navigation stays offline; absent HTML returns a usable recovery document", async () => {
@@ -83,4 +94,33 @@ test("a healthy previous reader continues to require its normal update confirmat
   const w = worker(true);
   w.stores.set(w.prefix + "healthy", new Map([[w.scope + "index.html", new Response('<script type="module" src="./assets/old.js"></script>')], [w.scope + "assets/old.js", new Response("old code")]]));
   await w.event("install"); assert.equal(w.activations(), 0);
+});
+
+test("a failed later precache batch discards the partial build and preserves the offline reader", async () => {
+  const resources = ["./index.html", ...Array.from({ length: 32 }, (_, index) => `./assets/chunk-${index}.js`)];
+  const w = worker(true, { resources, failBatch: 2 });
+  const previous = w.prefix + "previous";
+  w.stores.set(previous, new Map([[w.scope + "index.html", new Response("previous reader")], [w.scope + "assets/old.js", new Response("previous code")]]));
+  w.stores.set("unrelated-cache", new Map());
+  await assert.rejects(w.event("install"), /precache download failed/);
+  assert.deepEqual(w.batches.map(batch => batch.length), [16, 16]);
+  assert.ok(w.batches.flat().every(request => request.cache === "reload" && request.url.startsWith(w.scope)));
+  assert.equal(w.stores.has(w.name), false, "partial build must be removed");
+  assert.deepEqual(w.deleted, [w.name]);
+  assert.equal(w.activations(), 0, "a failed install must never replace the active worker");
+  assert.equal(await w.stores.get(previous).get(w.scope + "index.html").clone().text(), "previous reader");
+  w.offline();
+  assert.equal(await (await w.event("fetch", { request: new Request(w.scope + "assets/old.js") })).text(), "previous code");
+  assert.equal(w.stores.has("unrelated-cache"), true);
+});
+
+test("a complete multi-batch repair activates only after every resource is cached", async () => {
+  const resources = ["./index.html", ...Array.from({ length: 32 }, (_, index) => `./assets/chunk-${index}.js`)];
+  const w = worker(true, { resources });
+  w.stores.set(w.prefix + "broken", new Map());
+  await w.event("install");
+  assert.deepEqual(w.batches.map(batch => batch.length), [16, 16, 1]);
+  assert.equal(w.stores.get(w.name).size, resources.length);
+  assert.equal(w.activations(), 1);
+  assert.deepEqual(w.activationSizes, [resources.length], "all resources must exist at activation time");
 });
