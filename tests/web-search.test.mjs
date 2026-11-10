@@ -17,6 +17,7 @@ const payload = { content: [
 test("native search is bounded and uses structured search results rather than fabricated text links", () => {
   const request = buildWebSearchRequest("q".repeat(6000));
   assert.equal(request.model, "deepseek-flash");
+  assert.equal(request.thinking.type, "disabled");
   assert.equal(request.tools[0].type, "web_search_20250305");
   assert.equal(request.tools[0].max_uses, 3);
   assert(request.messages[0].content[0].text.length < 5100);
@@ -26,7 +27,7 @@ test("native search is bounded and uses structured search results rather than fa
   assert.equal(result.sources[1].excerpt, "Source excerpt");
   assert.equal(result.summary, "Retrieved evidence summary");
   assert.throws(() => parseWebSearchResponse({ content: [{ type: "text", text: "I searched: https://made-up.example" }] }), /实际联网检索/);
-  assert.throws(() => parseWebSearchResponse({ content: [{ type: "web_search_tool_result", content: { type: "web_search_tool_result_error" } }] }), /未取得/);
+  assert.throws(() => parseWebSearchResponse({ content: [{ type: "web_search_tool_result", content: { type: "web_search_tool_result_error", error_code: "too_many_requests" } }] }), /too_many_requests/);
   assert.throws(() => parseWebSearchResponse({ content: [{ type: "web_search_tool_result", content: [{ type: "web_search_result", url: "https://example.org" }] }] }), /没有可用于解答的摘要/);
 });
 
@@ -72,7 +73,8 @@ test("complete personal-mode search uses the existing key, preserves vision and 
   assert(calls[1].body.messages.some(message => message.content === "Full paper"));
   assert(calls[1].body.messages.some(message => typeof message.content === "string" && message.content.includes("Verified quotation")));
   assert.match(answer, /联网检索来源/); assert.match(answer, /https:\/\/example.org\/paper/);
-  assert.equal(progress.length, 2);
+  assert(progress.some(value => value.includes("联网检索")));
+  assert(progress.some(value => value.includes("结合文献解答")));
   calls.length = 0;
   await askAi([{ role: "user", content: "Translate" }], [], true, "Full paper");
   assert.equal(calls.length, 1); assert(!calls[0].url.includes("/anthropic/"));

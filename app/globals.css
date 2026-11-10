@@ -163,6 +163,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .chat-heading-icon{display:grid;place-items:center;width:37px;height:37px;border-radius:12px;background:#e8f3ec;color:#3d8b6f}
 .chat-close{margin-left:auto}
 .chat-messages{flex:1;min-height:0;overflow-y:auto;padding:20px 17px;display:flex;flex-direction:column;gap:17px}
+.ai-response-status{display:grid;gap:12px}.ai-partial-answer,.ai-request-error span{white-space:pre-wrap;overflow-wrap:anywhere}.ai-request-progress,.ai-request-error{display:flex;align-items:center;gap:10px;font-size:12px;line-height:1.7;padding:10px;border-radius:8px;background:#edf4f0;color:#345c50}.ai-request-progress span,.ai-request-error span{flex:1;min-width:0}.ai-request-progress button,.ai-request-error button{flex:none;border:1px solid #ccdcd3;border-radius:6px;padding:6px;background:#fff;color:inherit;font-size:12px}.ai-request-error{background:#fff1eb;color:#9c4931}.ai-response-status .message-body small{color:#849087}
 .chat-empty{display:flex;flex-direction:column;align-items:flex-start;padding:39px 10px}
 .chat-empty>span{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:#eaf5ed;color:#4d9279;font-size:25px}
 .chat-empty h3{font-size:16px;margin:21px 0 6px;color:#31484b}

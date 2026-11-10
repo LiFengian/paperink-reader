@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildAiRequest } from "../../../lib/ai-client";
 import { hasPaperInkAccess } from "../../../lib/access";
+import { aiOutputBudget, completeDeepSeek, DeepSeekError } from "../../../lib/deepseek-transport";
 
 export const runtime = "edge";
 
@@ -56,29 +57,16 @@ export async function POST(request: NextRequest) {
       messages = buildAiRequest(safe, images as string[], { model: "deepseek-flash", effort }, paper).messages;
     }
 
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
+    const content = await completeDeepSeek({
         model: "deepseek-flash",
         thinking: { type: mode === "ocr" || effort === "none" ? "disabled" : "enabled" },
         reasoning_effort: mode === "ocr" ? "none" : effort,
         messages,
-        max_tokens: mode === "ocr" ? 1400 : effort === "none" ? 5000 : effort === "max" ? 32768 : 24576,
-      }),
-      signal: AbortSignal.timeout(180_000),
-    });
-    if (!response.ok) {
-      return NextResponse.json({ error: `DeepSeek 请求失败（${response.status}）。请检查 Key 或稍后重试。` }, { status: 502 });
-    }
-    const result = await response.json() as { choices?: { message?: { content?: string } }[] };
-    const content = result.choices?.[0]?.message?.content?.trim();
-    if (!content) return NextResponse.json({ error: "DeepSeek 未返回内容。" }, { status: 502 });
+        max_tokens: mode === "ocr" ? 1400 : aiOutputBudget(effort),
+      }, key, { signal: request.signal });
     return NextResponse.json({ content }, { headers: { "Cache-Control": "no-store" } });
-  } catch {
+  } catch (error) {
+    if (error instanceof DeepSeekError) return NextResponse.json({ error: error.message }, { status: 502 });
     return NextResponse.json({ error: "请求处理失败，请重试。" }, { status: 500 });
   }
 }
